@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>事業評価AIサービス</title>
+  <style>
+    :root {
+      --bg: #0f0f13;
+      --card: #1a1a22;
+      --border: #2a2a38;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Hiragino Kaku Gothic Pro', 'Noto Sans JP', sans-serif;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 760px; margin: 0 auto; }
+    header { text-align: center; margin-bottom: 2.5rem; }
+    header h1 { font-size: 1.8rem; font-weight: 700; letter-spacing: -0.02em; }
+    header p { color: var(--muted); margin-top: 0.5rem; font-size: 0.9rem; }
+
+    .badge {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-bottom: 0.8rem;
+      letter-spacing: 0.05em;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--accent-hover);
+    }
+
+    /* モード選択 */
+    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .mode-option { display: none; }
+    .mode-label {
+      display: flex; flex-direction: column;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .mode-label:hover { border-color: var(--accent); }
+    .mode-option:checked + .mode-label {
+      border-color: var(--accent);
+      background: rgba(99,102,241,0.1);
+    }
+    .mode-label .mode-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.3rem; }
+    .mode-label .mode-desc { font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+
+    /* フォーム */
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+    label .required { color: var(--danger); margin-left: 3px; }
+    textarea, input[type="text"], input[type="number"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 0.75rem;
+      font-size: 0.9rem;
+      font-family: inherit;
+      resize: vertical;
+      transition: border-color 0.15s;
+      outline: none;
+    }
+    textarea:focus, input:focus { border-color: var(--accent); }
+    textarea { min-height: 120px; }
+    .field { margin-bottom: 1.25rem; }
+    .hint { font-size: 0.78rem; color: var(--muted); margin-top: 0.35rem; line-height: 1.5; }
+
+    /* ポジション選択ラジオ */
+    .position-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-bottom: 1rem; }
+    .pos-option { display: none; }
+    .pos-label {
+      display: block; text-align: center;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 0.5rem;
+      cursor: pointer;
+      font-size: 0.82rem;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .pos-label:hover { border-color: var(--accent); }
+    .pos-option:checked + .pos-label {
+      border-color: var(--accent);
+      background: rgba(99,102,241,0.12);
+      color: var(--accent-hover);
+      font-weight: 600;
+    }
+
+    /* サブ質問ラベル */
+    .sub-q {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.35rem;
+      margin-top: 1rem;
+    }
+    .sub-q:first-of-type { margin-top: 0; }
+
+    @media (max-width: 500px) {
+      .position-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    /* 送信ボタン */
+    .submit-btn {
+      width: 100%;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 1rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      font-family: inherit;
+    }
+    .submit-btn:hover { background: var(--accent-hover); }
+    .submit-btn:active { transform: scale(0.98); }
+
+    /* Why me セクションの表示切替 */
+    #why-me-section { display: block; }
+    body.coo-mode #why-me-section { display: none; }
+
+    /* ローディング */
+    .loading-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .loading-overlay.active { display: flex; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { color: var(--muted); font-size: 0.9rem; }
+
+    @media (max-width: 500px) {
+      .mode-grid { grid-template-columns: 1fr; }
+      .q3-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-overlay" id="loading">
+    <div class="spinner"></div>
+    <div class="loading-text">AIが評価中です... 少々お待ちください（1〜2分）</div>
+  </div>
+
+  <div class="container">
+    <header>
+      <div class="badge">CLOSED BETA</div>
+      <h1>事業評価AIサービス</h1>
+      <p>事業構想を入力すると、多角的フレームワークで構造的に評価します</p>
+    </header>
+
+    <form method="POST" action="/evaluate" id="eval-form">
+
+      <!-- モード選択 -->
+      <div class="card">
+        <h2>評価モードを選択</h2>
+        <div class="mode-grid">
+          <div>
+            <input type="radio" name="mode" id="mode-startup" value="startup" class="mode-option" checked>
+            <label for="mode-startup" class="mode-label">
+              <span class="mode-title">🚀 スタートアップ評価</span>
+              <span class="mode-desc">Why me / Why now から NPV/EXIT まで、事業構想を全方位評価</span>
+            </label>
+          </div>
+          <div>
+            <input type="radio" name="mode" id="mode-coo" value="coo" class="mode-option">
+            <label for="mode-coo" class="mode-label">
+              <span class="mode-title">🔧 COOターンアラウンド</span>
+              <span class="mode-desc">既存事業の財務診断から穴塞ぎ・アクセラレーターまで優先打ち手を特定</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 事業構想（複数テキストボックス） -->
+      <div class="card">
+        <h2>事業構想</h2>
+
+        <div class="field">
+          <label for="problem">解決する課題<span class="required">*</span></label>
+          <textarea
+            id="problem"
+            name="problem"
+            placeholder="誰の・どんな問題を解決しますか？&#10;例: フリーランスエンジニアは確定申告の準備に毎年20時間以上かかっており、税務知識がなく申告ミスのリスクも高い。"
+            required
+          ></textarea>
+        </div>
+
+        <div class="field">
+          <label for="solution">ソリューション<span class="required">*</span></label>
+          <textarea
+            id="solution"
+            name="solution"
+            placeholder="どうやって解決しますか？&#10;例: 銀行・カード明細を自動取得し、AIが勘定科目を分類・申告書を自動生成するSaaS。30分で確定申告が完了する。"
+            required
+          ></textarea>
+        </div>
+
+        <div class="field">
+          <label for="business_model">ビジネスモデル（収益化）<span class="required">*</span></label>
+          <textarea
+            id="business_model"
+            name="business_model"
+            placeholder="どうやって収益を得ますか？&#10;例: 月額980円のサブスク。初年度無料トライアルで5,000人獲得後、有料転換率30%を目標。"
+          ></textarea>
+        </div>
+
+        <div class="field">
+          <label for="phase">現在のフェーズ</label>
+          <input
+            type="text"
+            id="phase"
+            name="phase"
+            placeholder="例: アイデア段階 / LP公開済み / β版20人使用中 / 月商30万円"
+          >
+        </div>
+
+        <div class="hint" style="margin-top: 0.25rem;">
+          ※ 主要競合はAIが自動で調査します（入力不要）
+        </div>
+      </div>
+
+      <!-- Why Me 評価セクション -->
+      <div class="card" id="why-me-section">
+        <h2>Why Me 評価（あなたがこの事業をやる理由）</h2>
+
+        <!-- チーム構成 -->
+        <div class="field">
+          <label>あなたのポジション<span class="required">*</span></label>
+          <div class="position-grid">
+            <div>
+              <input type="radio" name="position" id="pos-ceo" value="CEO / 創業者" class="pos-option" checked>
+              <label for="pos-ceo" class="pos-label">CEO / 創業者</label>
+            </div>
+            <div>
+              <input type="radio" name="position" id="pos-full" value="フルコミット共同創業者" class="pos-option">
+              <label for="pos-full" class="pos-label">フルコミット<br>共同創業者</label>
+            </div>
+            <div>
+              <input type="radio" name="position" id="pos-committable" value="コミッタブルメンバー" class="pos-option">
+              <label for="pos-committable" class="pos-label">コミッタブル<br>メンバー</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="full_commit_members">フルコミットメンバー（あなた以外）</label>
+          <input
+            type="text"
+            id="full_commit_members"
+            name="full_commit_members"
+            placeholder="例: CTO（元Google SWE）、デザイナー（TOEIC900）"
+          >
+          <div class="hint">なければ空欄でOK</div>
+        </div>
+
+        <div class="field">
+          <label for="committable_members">コミッタブルメンバー（副業・週20h以上コミット可能）</label>
+          <input
+            type="text"
+            id="committable_members"
+            name="committable_members"
+            placeholder="例: マーケ担当（元P&G）、エンジニア（AWS認定）"
+          >
+          <div class="hint">なければ空欄でOK</div>
+        </div>
+
+        <!-- Q2: 背景・継続性・逆境耐性 -->
+        <div style="border-top: 1px solid var(--border); margin: 1.25rem 0 1rem;"></div>
+        <div style="font-size:0.8rem; color:var(--muted); margin-bottom:1rem;">
+          Q2. 背景・継続性・逆境耐性（Factor 2 評価）
+        </div>
+
+        <div class="field">
+          <div class="sub-q">2-1. 誰の助けも借りずに、最も長く取り組み続けたことは何ですか？期間と、何度やめようと思いましたか？</div>
+          <textarea
+            id="q2_1_continuity"
+            name="q2_1_continuity"
+            placeholder="例: 大学2年から4年間、個人で技術ブログを継続。収益化できない時期が2年あり3回やめようと思ったが、読者からのコメントをきっかけに継続した。"
+          ></textarea>
+          <div class="hint">「挫折回数0」も評価します。大きなリスクを取っているか、失敗を成長に変えられるかを見ます。</div>
+        </div>
+
+        <div class="field">
+          <div class="sub-q">2-2. チームメンバーの役割と、この事業に関連する資格・職歴・学歴を教えてください。</div>
+          <textarea
+            id="q2_2_credentials"
+            name="q2_2_credentials"
+            style="min-height: 110px;"
+            placeholder="メンバーごとに記入してください。&#10;例:&#10;・自分（CEO）: 医師免許、外科3年勤務&#10;・CTO（フルコミット）: 東大院 情報工学、元Google SWE 5年&#10;・マーケ担当（コミッタブル）: 元P&G、MBA&#10;&#10;特になければ「特になし」"
+          ></textarea>
+          <div class="hint">資格の有無より「この事業との関連性」と「誰が持っているか（役割）」を重視します。</div>
+        </div>
+
+        <div class="field">
+          <div class="sub-q">2-3. その資格・経験を、この事業でどう活かしますか？具体的なエピソードがあれば。</div>
+          <textarea
+            id="q2_3_application"
+            name="q2_3_application"
+            style="min-height: 90px;"
+            placeholder="例: 医師として現場で感じた「カルテ記入の非効率」が事業の原点。院内での実証実験も自力で設計できる。"
+          ></textarea>
+        </div>
+
+        <div class="field">
+          <div class="sub-q">2-4. AIツールを業務でどの程度活用していますか？</div>
+          <textarea
+            id="q2_4_ai_usage"
+            name="q2_4_ai_usage"
+            style="min-height: 80px;"
+            placeholder="例: Claude・Cursor・Perplexityを毎日業務利用。コーディング補助・リサーチ・資料作成に活用している。&#10;またはほぼ使っていない。"
+          ></textarea>
+        </div>
+
+        <!-- Q3: 巻き込み力 -->
+        <div style="border-top: 1px solid var(--border); margin: 1.25rem 0 1rem;"></div>
+        <div style="font-size:0.8rem; color:var(--muted); margin-bottom:1rem;">
+          Q3. 巻き込み力（Factor 3 評価）
+        </div>
+
+        <div class="field">
+          <div class="sub-q">3-1. 今すぐ理由を聞かずに1万円を貸してくれそうなハブとなる人は何人いますか？重複度も教えてください。</div>
+          <textarea
+            id="q3_1_network"
+            name="q3_1_network"
+            style="min-height: 100px;"
+            placeholder="例: 10人くらい。ただし半分は同じコミュニティ出身で重複が多い。&#10;残り5人は異業種・異コミュニティで重複が少ない。&#10;&#10;※ 人数不明なら「多め／少ない」「重複が多い／少ない」など感覚値でもOK"
+          ></textarea>
+        </div>
+
+        <div class="field">
+          <div class="sub-q">3-2. その中で「1次ドア」と「2次ドア」はそれぞれ何人いますか？</div>
+          <textarea
+            id="q3_2_doors"
+            name="q3_2_doors"
+            style="min-height: 100px;"
+            placeholder="例: 1次ドア（直接資源にアクセスできる人）: 元上場企業役員1名、VC 1名 → 計2名&#10;2次ドア（複数コミュニティを橋渡しできる人）: 異業種ハブ 3名&#10;&#10;※ 1次ドア = VC・上場役員・行政決裁者など&#10;※ 2次ドア = 多様コミュニティのブローカー・フットワーク軽い人など"
+          ></textarea>
+        </div>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submit-btn">
+        評価を開始する →
+      </button>
+    </form>
+  </div>
+
+  <script>
+    // モード切替でWhy Meセクションを表示/非表示
+    const modeInputs = document.querySelectorAll('input[name="mode"]');
+    modeInputs.forEach(input => {
+      input.addEventListener('change', () => {
+        const whyMe = document.getElementById('why-me-section');
+        whyMe.style.display = input.value === 'startup' ? 'block' : 'none';
+      });
+    });
+
+    // フォーム送信時にローディング表示
+    document.getElementById('eval-form').addEventListener('submit', () => {
+      document.getElementById('loading').classList.add('active');
+      document.getElementById('submit-btn').disabled = true;
+    });
+  </script>
+</body>
+</html>

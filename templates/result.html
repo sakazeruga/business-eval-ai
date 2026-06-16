@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>評価レポート | 事業評価AIサービス</title>
+  <style>
+    :root {
+      --bg: #0f0f13;
+      --card: #1a1a22;
+      --card2: #141420;
+      --border: #2a2a38;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Hiragino Kaku Gothic Pro', 'Noto Sans JP', sans-serif;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+
+    header { margin-bottom: 2rem; }
+    .header-top {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;
+    }
+    header h1 { font-size: 1.5rem; font-weight: 700; }
+    .back-btn {
+      text-decoration: none;
+      color: var(--muted);
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      padding: 0.4rem 1rem;
+      border-radius: 8px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .back-btn:hover { color: var(--text); border-color: var(--accent); }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+    .badge-startup { background: rgba(99,102,241,0.2); color: var(--accent-hover); }
+    .badge-coo { background: rgba(16,185,129,0.2); color: var(--green); }
+
+    /* BUSINESS CONCEPT */
+    .idea-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 2rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    .idea-box strong { color: var(--text); display: block; margin-bottom: 0.4rem; font-size: 0.8rem; letter-spacing: 0.06em; }
+    .idea-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1.5rem; margin-top: 0.6rem; }
+    .idea-field-label { color: var(--text); font-size: 0.75rem; font-weight: 600; margin-bottom: 0.2rem; }
+    .idea-field-value { color: var(--muted); font-size: 0.85rem; line-height: 1.6; }
+    @media (max-width: 600px) { .idea-grid { grid-template-columns: 1fr; } }
+
+    /* 目次 */
+    .toc {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 2rem;
+    }
+    .toc h3 { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.6rem; letter-spacing: 0.06em; }
+    .toc-list { display: flex; flex-wrap: wrap; gap: 0.5rem; list-style: none; }
+    .toc-list a {
+      text-decoration: none;
+      color: var(--muted);
+      font-size: 0.8rem;
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.75rem;
+      border-radius: 6px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .toc-list a:hover { color: var(--accent-hover); border-color: var(--accent); }
+
+    /* セクションカード（共通） */
+    .section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 1.5rem;
+      overflow: hidden;
+    }
+    .section-header {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.9rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card2);
+      cursor: pointer;
+      user-select: none;
+      border-left: 3px solid transparent;
+    }
+    .section-icon { font-size: 1.05rem; }
+    .section-title { font-size: 0.93rem; font-weight: 600; flex: 1; }
+    .cat-badge {
+      font-size: 0.65rem;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+    .model-tag {
+      font-size: 0.62rem;
+      color: #4b5563;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid #2a2a38;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      white-space: nowrap;
+    }
+    .toggle-icon { color: var(--muted); font-size: 0.8rem; transition: transform 0.2s; }
+    .section.collapsed .toggle-icon { transform: rotate(-90deg); }
+    .section-body {
+      padding: 1.25rem;
+      font-size: 0.88rem;
+      line-height: 1.8;
+      word-break: break-word;
+      white-space: normal;
+    }
+    .section.collapsed .section-body { display: none; }
+
+    /* ── カテゴリ別カラーリング ── */
+    /* 分析: indigo */
+    .section[data-category="analysis"] { border-color: rgba(99,102,241,0.35); }
+    .section[data-category="analysis"] .section-header {
+      background: rgba(99,102,241,0.07);
+      border-left-color: var(--accent);
+    }
+    .section[data-category="analysis"] .cat-badge {
+      background: rgba(99,102,241,0.18);
+      color: var(--accent-hover);
+    }
+
+    /* 財務: green */
+    .section[data-category="financial"] { border-color: rgba(16,185,129,0.35); }
+    .section[data-category="financial"] .section-header {
+      background: rgba(16,185,129,0.07);
+      border-left-color: var(--green);
+    }
+    .section[data-category="financial"] .cat-badge {
+      background: rgba(16,185,129,0.18);
+      color: var(--green);
+    }
+
+    /* 戦略・提案: amber */
+    .section[data-category="strategy"] { border-color: rgba(245,158,11,0.35); }
+    .section[data-category="strategy"] .section-header {
+      background: rgba(245,158,11,0.07);
+      border-left-color: var(--yellow);
+    }
+    .section[data-category="strategy"] .cat-badge {
+      background: rgba(245,158,11,0.18);
+      color: var(--yellow);
+    }
+
+    /* Markdownレンダリング */
+    .section-body h1, .section-body h2, .section-body h3 {
+      color: var(--accent-hover);
+      margin: 1rem 0 0.4rem;
+      font-size: 0.95rem;
+    }
+    .section-body h3 { font-size: 0.88rem; color: var(--muted); }
+    .section-body p { margin: 0.5rem 0; line-height: 1.8; }
+    .section-body ul, .section-body ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    .section-body li { margin: 0.25rem 0; line-height: 1.7; }
+    .section-body strong { color: var(--text); }
+    .section-body hr { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
+    .section-body blockquote {
+      border-left: 3px solid var(--accent);
+      padding-left: 0.75rem;
+      color: var(--muted);
+      margin: 0.5rem 0;
+    }
+    .section-body table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.75rem 0;
+      font-size: 0.83rem;
+    }
+    .section-body th, .section-body td {
+      border: 1px solid var(--border);
+      padding: 0.4rem 0.75rem;
+      text-align: left;
+    }
+    .section-body th { background: var(--card2); color: var(--muted); }
+
+    /* アクションフッター */
+    .action-bar { display: flex; gap: 1rem; margin-top: 2rem; flex-wrap: wrap; }
+    .action-btn {
+      flex: 1; min-width: 140px;
+      text-align: center;
+      padding: 0.85rem;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-family: inherit;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-ai {
+      background: rgba(245,158,11,0.12);
+      color: var(--yellow);
+      border: 1px solid rgba(245,158,11,0.4);
+    }
+    .btn-ai:hover { background: rgba(245,158,11,0.22); border-color: var(--yellow); }
+    .btn-secondary {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { color: var(--text); border-color: var(--accent); }
+    .btn-secondary a { color: inherit; text-decoration: none; }
+
+    /* 印刷 */
+    @media print {
+      .section.collapsed .section-body { display: block !important; }
+      .action-bar, .toc, .back-btn { display: none; }
+      .section-header { cursor: default; }
+    }
+
+    /* AI壁打ちエクスポートモーダル */
+    .md-modal {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.78);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .md-modal.active { display: flex; }
+    .md-box {
+      background: var(--card);
+      border: 1px solid rgba(245,158,11,0.4);
+      border-radius: 12px;
+      width: 100%; max-width: 860px;
+      max-height: 88vh;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .md-box-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 1rem 1.25rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      gap: 1rem;
+    }
+    .md-box-header-text h3 { font-size: 0.95rem; font-weight: 700; color: var(--yellow); margin-bottom: 0.3rem; }
+    .md-box-header-text p { font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+    .md-close {
+      background: none; border: none; color: var(--muted);
+      font-size: 1.2rem; cursor: pointer; line-height: 1; flex-shrink: 0; margin-top: 2px;
+    }
+    .md-close:hover { color: var(--text); }
+    .md-toolbar {
+      display: flex; gap: 0.6rem; align-items: center;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .md-toolbar-label { font-size: 0.75rem; color: var(--muted); margin-right: auto; }
+    .md-toolbar button {
+      font-size: 0.82rem; padding: 0.4rem 1rem;
+      border-radius: 7px; cursor: pointer; font-family: inherit;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      transition: background 0.15s, color 0.15s;
+    }
+    .md-dl-btn {
+      background: var(--yellow);
+      color: #0f0f13;
+      border-color: var(--yellow);
+    }
+    .md-dl-btn:hover { background: #fbbf24; }
+    .md-copy-btn { background: transparent; color: var(--muted); }
+    .md-copy-btn:hover { color: var(--text); border-color: var(--accent); }
+    .md-content {
+      overflow-y: auto;
+      padding: 1.25rem;
+      font-family: 'Courier New', Consolas, monospace;
+      font-size: 0.78rem;
+      line-height: 1.75;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      flex: 1;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div class="header-top">
+      <h1>📊 評価レポート</h1>
+      <a href="/" class="back-btn">← 再評価する</a>
+    </div>
+    <span class="badge {% if mode == 'startup' %}badge-startup{% else %}badge-coo{% endif %}">
+      {% if mode == 'startup' %}🚀 スタートアップ評価モード{% else %}🔧 COOターンアラウンドモード{% endif %}
+    </span>
+  </header>
+
+  <!-- BUSINESS CONCEPT -->
+  <div class="idea-box">
+    <strong>BUSINESS CONCEPT</strong>
+    <div class="idea-grid">
+      {% if business_idea.problem %}
+      <div>
+        <div class="idea-field-label">課題</div>
+        <div class="idea-field-value">{{ business_idea.problem }}</div>
+      </div>
+      {% endif %}
+      {% if business_idea.solution %}
+      <div>
+        <div class="idea-field-label">ソリューション</div>
+        <div class="idea-field-value">{{ business_idea.solution }}</div>
+      </div>
+      {% endif %}
+      {% if business_idea.business_model %}
+      <div>
+        <div class="idea-field-label">ビジネスモデル</div>
+        <div class="idea-field-value">{{ business_idea.business_model }}</div>
+      </div>
+      {% endif %}
+      {% if business_idea.phase %}
+      <div>
+        <div class="idea-field-label">フェーズ</div>
+        <div class="idea-field-value">{{ business_idea.phase }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- 目次 -->
+  <div class="toc">
+    <h3>SECTIONS</h3>
+    <ul class="toc-list">
+      {% if mode == 'startup' %}
+        <li><a href="#competitors">① 競合調査</a></li>
+        <li><a href="#why-me">② Why Me</a></li>
+        <li><a href="#why-now">③ Why Now</a></li>
+        <li><a href="#vrio">④ VRIO</a></li>
+        <li><a href="#marketing">⑤ マーケティング</a></li>
+        <li><a href="#operations">⑥ オペレーション</a></li>
+        <li><a href="#cashflow">⑦ CF戦略</a></li>
+        <li><a href="#npv-exit">⑧ NPV/EXIT</a></li>
+        <li><a href="#cross-swot">⑨ クロスSWOT / 打開策</a></li>
+      {% else %}
+        <li><a href="#coo-diagnosis">① COO診断</a></li>
+        <li><a href="#vrio">② VRIO</a></li>
+        <li><a href="#cashflow">③ CF戦略</a></li>
+        <li><a href="#cross-swot">④ クロスSWOT / 打開策</a></li>
+      {% endif %}
+    </ul>
+  </div>
+
+  <!-- セクション出力 -->
+  {% if mode == 'startup' %}
+
+    <div class="section" id="competitors" data-category="analysis">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">🔍</span>
+        <span class="section-title">① 競合調査（AI自動）</span>
+        <span class="cat-badge">分析</span>
+        <span class="model-tag">{{ models.competitors }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.competitors | default('取得できませんでした') }}</div>
+    </div>
+
+    <div class="section" id="why-me" data-category="analysis">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">💡</span>
+        <span class="section-title">② Why Me — 創業者の必然性</span>
+        <span class="cat-badge">分析</span>
+        <span class="model-tag">{{ models.why_me }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.why_me | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="why-now" data-category="analysis">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">⏱️</span>
+        <span class="section-title">③ Why Now — 市場成長性・タイミング</span>
+        <span class="cat-badge">分析</span>
+        <span class="model-tag">{{ models.why_now }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.why_now | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="vrio" data-category="analysis">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">🏆</span>
+        <span class="section-title">④ VRIO — 競争優位性分析</span>
+        <span class="cat-badge">分析</span>
+        <span class="model-tag">{{ models.vrio }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.vrio | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="marketing" data-category="strategy">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">📣</span>
+        <span class="section-title">⑤ マーケティング施策評価</span>
+        <span class="cat-badge">戦略</span>
+        <span class="model-tag">{{ models.marketing }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.marketing | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="operations" data-category="strategy">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">⚙️</span>
+        <span class="section-title">⑥ オペレーション蓋然性</span>
+        <span class="cat-badge">戦略</span>
+        <span class="model-tag">{{ models.operations }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.operations | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="cashflow" data-category="financial">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">💰</span>
+        <span class="section-title">⑦ 財務戦略評価（CF）</span>
+        <span class="cat-badge">財務</span>
+        <span class="model-tag">{{ models.cashflow }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.cashflow | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="npv-exit" data-category="financial">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">📈</span>
+        <span class="section-title">⑧ NPV / EXIT 事業価値</span>
+        <span class="cat-badge">財務</span>
+        <span class="model-tag">{{ models.npv_exit }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.npv_exit | default('評価結果がありません') }}</div>
+    </div>
+
+  {% else %}
+
+    <div class="section" id="coo-diagnosis" data-category="analysis">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">🔍</span>
+        <span class="section-title">① COO診断 — 財務・オペレーション問題マップ</span>
+        <span class="cat-badge">分析</span>
+        <span class="model-tag">{{ models.coo_diagnosis }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.coo_diagnosis | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="vrio" data-category="analysis">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">🏆</span>
+        <span class="section-title">② VRIO — 競争優位性分析</span>
+        <span class="cat-badge">分析</span>
+        <span class="model-tag">{{ models.vrio }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.vrio | default('評価結果がありません') }}</div>
+    </div>
+
+    <div class="section" id="cashflow" data-category="financial">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">💰</span>
+        <span class="section-title">③ 財務戦略評価（CF）</span>
+        <span class="cat-badge">財務</span>
+        <span class="model-tag">{{ models.cashflow }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body">{{ results.cashflow | default('評価結果がありません') }}</div>
+    </div>
+
+  {% endif %}
+
+  <!-- クロスSWOT（共通） -->
+  <div class="section" id="cross-swot" data-category="strategy">
+    <div class="section-header" onclick="toggleSection(this)">
+      <span class="section-icon">🎯</span>
+      <span class="section-title">
+        {% if mode == 'startup' %}⑨{% else %}④{% endif %}
+        クロスSWOT / 追加ソリューション / 打開策
+      </span>
+      <span class="cat-badge">提案</span>
+      <span class="model-tag">{{ models.cross_swot }}</span>
+      <span class="toggle-icon">▼</span>
+    </div>
+    <div class="section-body">{{ results.cross_swot | default('評価結果がありません') }}</div>
+  </div>
+
+  <div class="action-bar">
+    <button class="action-btn btn-primary" onclick="window.print()">
+      📄 PDFで保存
+    </button>
+    <button class="action-btn btn-ai" onclick="openMdModal()">
+      🤖 AI壁打ち用エクスポート
+    </button>
+    <button class="action-btn btn-secondary">
+      <a href="/">← 再評価する</a>
+    </button>
+  </div>
+
+</div>
+
+<!-- AI壁打ち用エクスポートモーダル -->
+<div class="md-modal" id="md-modal" onclick="closeMdModalOnBg(event)">
+  <div class="md-box">
+    <div class="md-box-header">
+      <div class="md-box-header-text">
+        <h3>🤖 AI壁打ち用エクスポート</h3>
+        <p>このテキストをChatGPT / Claude等のAIに貼り付けると、評価内容を前提に深掘り・壁打ちができます。<br>
+           「この評価を踏まえてXXXについて相談したい」のように冒頭に追記してください。</p>
+      </div>
+      <button class="md-close" onclick="closeMdModal()">✕</button>
+    </div>
+    <div class="md-toolbar">
+      <span class="md-toolbar-label">Markdown形式 / そのままAIにペーストできます</span>
+      <button class="md-copy-btn" onclick="copyMd()">📋 コピー</button>
+      <button class="md-dl-btn" onclick="downloadMd()">⬇ .mdダウンロード</button>
+    </div>
+    <pre class="md-content" id="md-content"></pre>
+  </div>
+</div>
+
+<script>
+  // Python側のデータをJSONで安全に受け取る（シングルクォート問題を回避）
+  const IDEA = {{ business_idea | tojson }};
+
+  // レンダリング前に生Markdownを保存してからHTMLに変換
+  document.querySelectorAll('.section-body').forEach(el => {
+    el.dataset.markdown = el.textContent.trim();
+    el.innerHTML = marked.parse(el.dataset.markdown);
+  });
+
+  function toggleSection(header) {
+    header.parentElement.classList.toggle('collapsed');
+  }
+
+  // スムーススクロール
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      const target = document.querySelector(a.getAttribute('href'));
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
+  // AI壁打ち用Markdownを生成
+  function buildMarkdown() {
+    const fields = [];
+    if (IDEA.problem)        fields.push('**課題**: ' + IDEA.problem.replace(/\n/g, ' '));
+    if (IDEA.solution)       fields.push('**ソリューション**: ' + IDEA.solution.replace(/\n/g, ' '));
+    if (IDEA.business_model) fields.push('**ビジネスモデル**: ' + IDEA.business_model.replace(/\n/g, ' '));
+    if (IDEA.phase)          fields.push('**フェーズ**: ' + IDEA.phase.replace(/\n/g, ' '));
+
+    let md = '# 事業評価AIレポート\n\n';
+    md += '> このドキュメントは事業評価AIが生成した分析レポートです。\n';
+    md += '> 以下の内容を前提として、AIとの壁打ち・深掘りにご活用ください。\n\n';
+    md += '---\n\n';
+    md += '## BUSINESS CONCEPT\n\n';
+    md += fields.join('\n\n') + '\n\n';
+    md += '---\n\n';
+
+    document.querySelectorAll('.section').forEach(section => {
+      const title = section.querySelector('.section-title').textContent.trim();
+      const modelEl = section.querySelector('.model-tag');
+      const model = modelEl ? ' (' + modelEl.textContent.trim() + ')' : '';
+      const body = section.querySelector('.section-body').dataset.markdown || '';
+      if (body) {
+        md += '## ' + title + model + '\n\n' + body + '\n\n---\n\n';
+      }
+    });
+
+    return md;
+  }
+
+  function openMdModal() {
+    document.getElementById('md-content').textContent = buildMarkdown();
+    document.getElementById('md-modal').classList.add('active');
+  }
+
+  function closeMdModal() {
+    document.getElementById('md-modal').classList.remove('active');
+  }
+
+  function closeMdModalOnBg(e) {
+    if (e.target === document.getElementById('md-modal')) closeMdModal();
+  }
+
+  function copyMd() {
+    const btn = document.querySelector('.md-copy-btn');
+    navigator.clipboard.writeText(buildMarkdown()).then(() => {
+      btn.textContent = '✅ コピーしました！';
+      setTimeout(() => btn.textContent = '📋 コピー', 2500);
+    });
+  }
+
+  function downloadMd() {
+    const md = buildMarkdown();
+    const blob = new Blob([md], { type: 'text/markdown; charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '事業評価レポート_AI壁打ち用.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+</script>
+</body>
+</html>
