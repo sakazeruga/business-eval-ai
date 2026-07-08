@@ -8,9 +8,10 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from openai import OpenAI
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from prompts import (
     SYSTEM_BASE,
@@ -30,6 +31,20 @@ load_dotenv()
 
 app = FastAPI(title="事業評価AIサービス")
 templates = Jinja2Templates(directory="templates")
+
+CF_SECRET = os.getenv("CF_SECRET_TOKEN", "")
+
+class CloudflareOnlyMiddleware(BaseHTTPMiddleware):
+    """Cloudflare 経由以外の直アクセスを遮断する"""
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
+        if CF_SECRET and request.headers.get("X-CF-Secret") != CF_SECRET:
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+        return await call_next(request)
+
+if CF_SECRET:
+    app.add_middleware(CloudflareOnlyMiddleware)
 
 # ============================================================
 # モデル設定
