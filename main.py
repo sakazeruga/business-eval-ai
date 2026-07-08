@@ -95,30 +95,12 @@ async def call_section(prompt_text: str, section_key: str) -> str:
     max_tokens = MAX_TOKENS.get(section_key, DEFAULT_MAX_TOKENS)
 
     def _sync_call() -> str:
-        if model.startswith("anthropic/"):
-            messages = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": SYSTEM_BASE,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ],
-                },
-                {"role": "user", "content": prompt_text},
-            ]
-        else:
-            messages = [
-                {"role": "user", "content": f"{SYSTEM_BASE}\n\n{prompt_text}"}
-            ]
+        messages = [
+            {"role": "system", "content": SYSTEM_BASE},
+            {"role": "user", "content": prompt_text},
+        ]
 
         kwargs: dict = dict(model=model, max_tokens=max_tokens, messages=messages)
-
-        # Claude: Extended Thinking を明示的に無効化（思考トークン課金を防ぐ）
-        if model.startswith("anthropic/"):
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         response = client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
