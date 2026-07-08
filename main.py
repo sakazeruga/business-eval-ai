@@ -281,3 +281,8 @@ async def evaluate(
 @app.get("/health")
 async def health():
     return {"status": "ok", "models": MODELS}
+
+
+@app.get("/debug-headers")
+async def debug_headers(request: Request):
+    return dict(request.headers)
