@@ -32,19 +32,22 @@ load_dotenv()
 app = FastAPI(title="事業評価AIサービス")
 templates = Jinja2Templates(directory="templates")
 
-CF_SECRET = os.getenv("CF_SECRET_TOKEN", "")
+REQUIRE_CF_ACCESS = os.getenv("REQUIRE_CF_ACCESS", "false").lower() == "true"
 
-class CloudflareOnlyMiddleware(BaseHTTPMiddleware):
-    """Cloudflare 経由以外の直アクセスを遮断する"""
+class CloudflareAccessMiddleware(BaseHTTPMiddleware):
+    """Cloudflare Access 経由以外の直アクセスを遮断する。
+    Cloudflare は認証済みリクエストに cf-access-authenticated-user-email を付与し、
+    直接アクセスではこのヘッダーを剥ぎ取るため、偽装不可。
+    """
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ("/health", "/debug-headers"):
             return await call_next(request)
-        if CF_SECRET and request.headers.get("X-CF-Secret") != CF_SECRET:
+        if not request.headers.get("cf-access-authenticated-user-email"):
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
         return await call_next(request)
 
-if CF_SECRET:
-    app.add_middleware(CloudflareOnlyMiddleware)
+if REQUIRE_CF_ACCESS:
+    app.add_middleware(CloudflareAccessMiddleware)
 
 # ============================================================
 # モデル設定
