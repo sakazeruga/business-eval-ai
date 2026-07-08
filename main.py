@@ -198,7 +198,7 @@ async def evaluate_coo(context: str) -> dict[str, str]:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.post("/evaluate", response_class=HTMLResponse)
@@ -252,9 +252,9 @@ async def evaluate(
     results["competitors"] = competitors
 
     return templates.TemplateResponse(
+        request,
         "result.html",
         {
-            "request": request,
             "mode": mode,
             "business_idea": business_idea,
             "results": results,
