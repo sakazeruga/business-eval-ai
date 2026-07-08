@@ -37,7 +37,7 @@ CF_SECRET = os.getenv("CF_SECRET_TOKEN", "")
 class CloudflareOnlyMiddleware(BaseHTTPMiddleware):
     """Cloudflare 経由以外の直アクセスを遮断する"""
     async def dispatch(self, request: Request, call_next):
-        if request.url.path == "/health":
+        if request.url.path in ("/health", "/debug-headers"):
             return await call_next(request)
         if CF_SECRET and request.headers.get("X-CF-Secret") != CF_SECRET:
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
