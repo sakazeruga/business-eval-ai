@@ -40,7 +40,7 @@ class CloudflareAccessMiddleware(BaseHTTPMiddleware):
     直接アクセスではこのヘッダーを剥ぎ取るため、偽装不可。
     """
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in ("/health", "/debug-headers"):
+        if request.url.path == "/health":
             return await call_next(request)
         if not request.headers.get("cf-access-authenticated-user-email"):
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
@@ -266,8 +266,3 @@ async def evaluate(
 @app.get("/health")
 async def health():
     return {"status": "ok", "models": MODELS}
-
-
-@app.get("/debug-headers")
-async def debug_headers(request: Request):
-    return dict(request.headers)
