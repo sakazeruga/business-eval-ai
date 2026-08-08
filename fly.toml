@@ -1,7 +1,7 @@
-[build]
-
 app = "business-eval-ai"
 primary_region = "nrt"
+
+[build]
 
 [http_service]
   internal_port = 8080
