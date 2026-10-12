@@ -4,8 +4,10 @@ OpenRouter 経由でモデルを呼び出す（Phase 2 でモデル切替が容�
 """
 
 import asyncio
+import logging
 import os
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -51,30 +53,66 @@ if REQUIRE_CF_ACCESS:
 
 # ============================================================
 # モデル設定
+#   - 検索が必要なセクション（SEARCH_MODELS）は Perplexity Agent API 経由
+#   - それ以外は OpenRouter 経由（ZDR 強制）
+#   - 要件: 学習利用なし / 非中華モデル
 # ============================================================
+HAIKU = "anthropic/claude-haiku-5.5"
+SONNET = "anthropic/claude-sonnet-5.5"
+LUNA = "openai/gpt-6-luna"
+
+# Perplexity Agent API のモデルID（provider/model、バージョンはハイフン区切り）
+SEARCH_MODELS = {
+    "competitors": "anthropic/claude-haiku-5-5",
+    "why_now":     "anthropic/claude-haiku-5-5",
+}
+
 MODELS = {
-    "competitors":     "perplexity/sonar",
-    "why_me":          "anthropic/claude-haiku-4-5",
-    "vrio":            "anthropic/claude-haiku-4-5",
-    "marketing":       "anthropic/claude-haiku-4-5",
-    "cashflow":        "anthropic/claude-haiku-4-5",
-    "npv_exit":        "deepseek/deepseek-r1",
-    "cross_swot":      "anthropic/claude-haiku-4-5",
-    "coo_diagnosis":   "anthropic/claude-haiku-4-5",
-    "why_now":         "google/gemini-3.5-flash",      # Gemini 3.5 Flash
-    "operations":      "openai/gpt-4o",
+    "competitors":     "claude-haiku-5.5 + Web検索（Perplexity）",
+    "why_me":          HAIKU,
+    "vrio":            HAIKU,
+    "marketing":       HAIKU,
+    "cashflow":        HAIKU,
+    "npv_exit":        HAIKU,
+    "cross_swot":      SONNET,    # 統合判断のみ上位モデル
+    "coo_diagnosis":   HAIKU,
+    "why_now":         "claude-haiku-5.5 + Web検索（Perplexity）",
+    "operations":      LUNA,      # 多段業務フロー系ベンチで Haiku より優位
 }
 
 MAX_TOKENS = {
-    "competitors":     1500,
-    "why_now":         4096,   # 2048 から拡張（空応答の原因だった可能性）
-    "operations":      3072,
+    "competitors":     4096,
+    "why_now":         6144,
+    "operations":      4096,
     "npv_exit":        6000,
+    "cross_swot":      8192,   # Sonnet は冗長なため、切り捨て防止で余裕を持たせる
 }
 DEFAULT_MAX_TOKENS = 4096
 
+# 推論（thinking）設定。Haiku 5.5 は既定で推論が走り、量が毎回変わって max_tokens を食い潰す
+# （実測: 推論 0〜4096 tokens、財務CFが本文空のまま打ち切られた）。定型出力のセクションは無効化する。
+# Sonnet 5.5 は推論を無効化できない（400）ため effort で調整する。
+DEFAULT_REASONING = {"enabled": False}
+REASONING = {
+    "cross_swot": {"effort": "medium"},
+}
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+PERPLEXITY_AGENT_URL = "https://api.perplexity.ai/v1/agent"
 APP_TITLE = "Business Evaluation AI"
+
+# OpenRouter 側で Zero Data Retention エンドポイントのみに限定する。
+# 対応エンドポイントが無いモデルでリクエストが失敗する場合は OPENROUTER_ZDR=false で切り分ける。
+OPENROUTER_ZDR = os.getenv("OPENROUTER_ZDR", "true").lower() == "true"
+
+SEARCH_INSTRUCTIONS_SUFFIX = (
+    "\n\nWeb検索ツールで最新の公開データを確認し、"
+    "市場規模・成長率などの数値には出典と年を併記すること。"
+)
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger("business_eval")
 
 
 def get_client() -> OpenAI:
@@ -88,10 +126,83 @@ def get_client() -> OpenAI:
     )
 
 
+async def call_search_section(prompt_text: str, section_key: str) -> str:
+    """Web検索が必要なセクションを Perplexity Agent API で評価する"""
+    model = SEARCH_MODELS[section_key]
+    api_key = os.getenv("PERPLEXITY_API_KEY")
+    if not api_key:
+        # 鍵が無くても評価全体は止めず、該当セクションのみ警告を表示する
+        return f"⚠️ [{model}] PERPLEXITY_API_KEY が設定されていないため、Web検索セクションを実行できませんでした。"
+
+    payload = {
+        "model": model,
+        "instructions": SYSTEM_BASE + SEARCH_INSTRUCTIONS_SUFFIX,
+        "input": prompt_text,
+        "max_output_tokens": MAX_TOKENS.get(section_key, DEFAULT_MAX_TOKENS),
+        "tools": [{"type": "web_search", "max_results": 5}],
+    }
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            PERPLEXITY_AGENT_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+        )
+
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("error", {}).get("message", resp.text[:300])
+        except ValueError:
+            detail = resp.text[:300]
+        return f"⚠️ [{model}] Perplexity API エラー（HTTP {resp.status_code}）: {detail}"
+
+    data = resp.json()
+    if data.get("status") == "failed" or data.get("error"):
+        msg = (data.get("error") or {}).get("message", "unknown")
+        return f"⚠️ [{model}] Perplexity API が失敗を返しました: {msg}"
+
+    texts: list[str] = []
+    sources: dict[str, str] = {}
+    for item in data.get("output", []):
+        # 出典URLは search_results 項目に入る（message の annotations は実測で常に空）
+        if item.get("type") == "search_results":
+            for res in item.get("results") or []:
+                if res.get("url"):
+                    sources.setdefault(res["url"], res.get("title") or res["url"])
+            continue
+        if item.get("type") != "message":
+            continue
+        for part in item.get("content", []):
+            if part.get("type") != "output_text":
+                continue
+            texts.append(part.get("text", ""))
+            for ann in part.get("annotations", []) or []:
+                if ann.get("type") == "url_citation" and ann.get("url"):
+                    sources.setdefault(ann["url"], ann.get("title") or ann["url"])
+
+    content = "".join(texts).strip()
+    if not content:
+        return f"⚠️ [{model}] 空の応答が返されました（status: {data.get('status')}）"
+
+    usage = data.get("usage") or {}
+    logger.info(
+        "usage section=%s model=%s in=%s out=%s cost=%s",
+        section_key, model, usage.get("input_tokens"), usage.get("output_tokens"),
+        (usage.get("cost") or {}).get("total_cost"),
+    )
+
+    if sources:
+        content += "\n\n**出典**\n" + "\n".join(f"- [{t}]({u})" for u, t in sources.items())
+    return content
+
+
 async def call_section(prompt_text: str, section_key: str) -> str:
-    """単一セクションを OpenRouter 経由で評価する（非同期）"""
+    """単一セクションを評価する（非同期）。検索系は Perplexity、他は OpenRouter 経由"""
+    if section_key in SEARCH_MODELS:
+        return await call_search_section(prompt_text, section_key)
+
     client = get_client()
-    model = MODELS.get(section_key, "anthropic/claude-haiku-4-5")
+    model = MODELS.get(section_key, HAIKU)
     max_tokens = MAX_TOKENS.get(section_key, DEFAULT_MAX_TOKENS)
 
     def _sync_call() -> str:
@@ -101,9 +212,21 @@ async def call_section(prompt_text: str, section_key: str) -> str:
         ]
 
         kwargs: dict = dict(model=model, max_tokens=max_tokens, messages=messages)
+        extra_body: dict = {"reasoning": REASONING.get(section_key, DEFAULT_REASONING)}
+        if OPENROUTER_ZDR:
+            extra_body["provider"] = {"zdr": True}
+        kwargs["extra_body"] = extra_body
 
         response = client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
+
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            logger.info(
+                "usage section=%s model=%s in=%s out=%s finish=%s",
+                section_key, model, usage.prompt_tokens, usage.completion_tokens,
+                getattr(response.choices[0], "finish_reason", None),
+            )
 
         # 空応答を無音で通すのではなくエラーとして表面化
         if not content:
@@ -117,7 +240,7 @@ async def call_section(prompt_text: str, section_key: str) -> str:
 
 
 async def fetch_competitors(business_idea_summary: str) -> str:
-    """Perplexity Sonar で競合を自動検索する"""
+    """Web検索付きで競合を自動調査する（失敗しても評価全体は止めない）"""
     prompt = f"""以下の事業の主要競合企業を5社、Markdown形式でリストアップしてください。
 
 事業概要:
@@ -134,7 +257,11 @@ async def fetch_competitors(business_idea_summary: str) -> str:
 **この事業との最大の差別化軸:**
 [1〜2文で]
 """
-    return await call_section(prompt, "competitors")
+    try:
+        return await call_section(prompt, "competitors")
+    except Exception as e:  # 競合調査の失敗で全セクションを落とさない
+        logger.exception("competitors failed")
+        return f"⚠️ 競合調査に失敗しました: {e}"
 
 
 async def evaluate_startup(context: str) -> dict[str, str]:

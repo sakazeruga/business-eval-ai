@@ -12,15 +12,15 @@
 
 | セクション | 内容 | 担当モデル |
 |---|---|---|
-| **Why Me** | 創業者適性（情報収集力・継続性・巻き込み力）の3因子乗算スコア | Claude Haiku |
-| **Why Now** | 市場成長性 × 潜在爆発力 × 社会還元性 | Gemini 3.5 Flash |
-| **競合調査** | 主要5社の自動リサーチ＋差別化軸 | Perplexity Sonar |
-| **VRIO分析** | 持続的競争優位の4軸評価 | Claude Haiku |
-| **マーケティング** | GTM戦略・CAC/LTV試算・チャネル蓋然性 | Claude Haiku |
-| **オペレーション** | 実行体制・クリティカルパス・ボトルネック | GPT-4o |
-| **キャッシュフロー** | CF循環構造・資金調達計画との整合性 | Claude Haiku |
-| **NPV / EXIT** | 財務仮定の自動生成 → DCF / EXIT事業価値算出 | DeepSeek R1 |
-| **クロスSWOT** | SO/ST/WO/WT戦略＋優先3手 | Claude Haiku |
+| **Why Me** | 創業者適性（情報収集力・継続性・巻き込み力）の3因子乗算スコア | Claude Haiku 5.5 |
+| **Why Now** | 市場成長性 × 潜在爆発力 × 社会還元性 | Claude Haiku 5.5 + Web検索（Perplexity） |
+| **競合調査** | 主要5社の自動リサーチ＋差別化軸 | Claude Haiku 5.5 + Web検索（Perplexity） |
+| **VRIO分析** | 持続的競争優位の4軸評価 | Claude Haiku 5.5 |
+| **マーケティング** | GTM戦略・CAC/LTV試算・チャネル蓋然性 | Claude Haiku 5.5 |
+| **オペレーション** | 実行体制・クリティカルパス・ボトルネック | GPT-6 Luna |
+| **キャッシュフロー** | CF循環構造・資金調達計画との整合性 | Claude Haiku 5.5 |
+| **NPV / EXIT** | 財務仮定の自動生成 → DCF / EXIT事業価値算出 | Claude Haiku 5.5 |
+| **クロスSWOT** | SO/ST/WO/WT戦略＋優先3手 | Claude Sonnet 5.5 |
 
 ### COOターンアラウンドモード
 
@@ -46,12 +46,13 @@ Why Me スコア = F1(情報収集力) × F2(継続性・公的能力) × F3(巻
 ```
 FastAPI + Jinja2 (SSR)
     ↓
-OpenRouter (マルチモデルゲートウェイ)
-    ├── anthropic/claude-haiku-4-5   Why Me / VRIO / マーケ / CF / クロスSWOT
-    ├── google/gemini-3.5-flash      Why Now（web検索付き市場評価）
-    ├── openai/gpt-4o                オペレーション蓋然性
-    ├── deepseek/deepseek-r1         NPV / DCF / EXIT算出
-    └── perplexity/sonar             競合自動リサーチ
+OpenRouter（ZDR強制）
+    ├── anthropic/claude-haiku-5.5   Why Me / VRIO / マーケ / CF / NPV・EXIT
+    ├── anthropic/claude-sonnet-5.5  クロスSWOT（統合判断）
+    └── openai/gpt-6-luna            オペレーション蓋然性
+Perplexity Agent API（Web検索 + claude-haiku-5-5）
+    ├── 競合自動リサーチ
+    └── Why Now（市場データの検索・出典付き）
 ```
 
 各セクションは `asyncio.gather` で並列実行。クロスSWOTのみ全セクション結果を集約してから生成。
@@ -130,11 +131,11 @@ py -m uvicorn main:app --reload
 
 | 構成 | 1回あたり概算 |
 |---|---|
-| 全セクション実行 | $0.05〜$0.15 |
-| DeepSeek R1（NPV）| $0.01〜$0.03 |
-| Perplexity Sonar（競合）| $0.005〜$0.01 |
+| 全セクション実行 | 約 $0.06（約 9 円） |
+| うちクロスSWOT（Sonnet 5.5） | 約 $0.05（全体の約 8 割） |
 
-> Extended Thinking は明示的に無効化済み（`thinking: {type: "disabled"}`）。Claude の思考トークン課金は発生しません。
+> Haiku 5.5 / Luna は推論を無効化（`reasoning.enabled=false`）。既定のままだと推論トークンが毎回変動し、`max_tokens` を食い潰して本文が切れる。Sonnet 5.5 は推論を無効化できないため `effort: medium`。
+> 要件: 学習利用なし（OpenRouter は `provider.zdr=true`）／非中華モデルのみ。
 
 ---
 
