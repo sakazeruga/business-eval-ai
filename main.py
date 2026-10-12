@@ -325,6 +325,133 @@ async def evaluate_sections(mode: str, context: str):
 
 
 # ============================================================
+# 自動入力（URL から公開情報を調査してフォームを下書きする）
+# ============================================================
+# フォーム項目は両モードで共通なので、1つの実装で startup / coo の両方に使える。
+AUTOFILL_FIELDS = {
+    "problem":             "この事業／企業が解決しようとしている課題",
+    "solution":            "提供している製品・サービスの内容",
+    "business_model":      "収益モデル（課金方式・価格・主要顧客）",
+    "phase":               "現在のフェーズ（設立年・従業員数・拠点・直近の動き）",
+    "full_commit_members": "代表者および常勤役員の氏名と経歴",
+    "committable_members":  "非常勤・顧問・アドバイザー",
+    "q2_2_credentials":    "代表者・役員が公開している学位・資格",
+    "q2_4_ai_usage":       "AI・デジタルツールの活用状況",
+}
+
+# 公開情報から埋まらない項目。推測させず、必ず利用者に質問する。
+AUTOFILL_ASK_USER = {
+    "q2_1_continuity":  "最も長く独力で取り組み続けたこと（期間と、何度やめようと思ったか）",
+    "q2_3_application": "資格・能力を実務でどう適用し、どんな成果が出たか",
+    "q3_1_network":     "理由を聞かずに1万円を貸してくれるハブ人材の人数と、ネットワークの重複度",
+    "q3_2_doors":       "1次ドア（資源・権限への直接経路）と2次ドア（コミュニティの橋渡し役）の人数",
+}
+
+AUTOFILL_INSTRUCTIONS = """あなたは企業調査の専門家です。指定URLとWeb検索から、公開情報のみを収集します。
+
+厳守事項:
+- 出典を確認できた内容だけを value に入れること
+- 根拠が無い項目は value を空文字にし、confidence を "unknown" にすること。推測で埋めてはならない
+- confidence は high（指定URL等の一次情報で確認）／medium（第三者の記事等）／low（断片的）／unknown（不明）
+- sources には参照したURLを入れること。value が空なら空配列でよい
+- 代表者については、公開されている職務経歴・学歴・資格に限定して記載すること。
+  私生活・家族・住所・連絡先など業務に無関係な個人情報は収集も記載もしないこと
+- 日本語で記述すること"""
+
+
+def autofill_schema() -> dict:
+    field = {
+        "type": "object",
+        "properties": {
+            "value":      {"type": "string"},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low", "unknown"]},
+            "sources":    {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["value", "confidence", "sources"],
+    }
+    props = {k: dict(field) for k in AUTOFILL_FIELDS}
+    props["company_name"] = {"type": "string"}
+    return {
+        "type": "object",
+        "properties": props,
+        "required": ["company_name", *AUTOFILL_FIELDS],
+    }
+
+
+async def autofill_from_url(url: str, mode: str) -> dict:
+    """URL から公開情報を調査し、フォームの下書きを返す"""
+    api_key = os.getenv("PERPLEXITY_API_KEY")
+    if not api_key:
+        raise ValueError("PERPLEXITY_API_KEY が設定されていません")
+
+    focus = (
+        "既存事業の立て直しを前提とした調査です。現在の事業内容・組織規模・"
+        "オペレーション上の課題、直近の業績や資金繰りに関する公開情報を重視してください。"
+        if mode != "startup" else
+        "新規事業の評価を前提とした調査です。構想・提供価値・差別化要素・"
+        "現在の開発フェーズに関する公開情報を重視してください。"
+    )
+    asks = "\n".join(f"- {k}: {v}" for k, v in AUTOFILL_FIELDS.items())
+    payload = {
+        "model": SEARCH_MODELS["competitors"],
+        "instructions": AUTOFILL_INSTRUCTIONS,
+        "input": (
+            f"調査対象URL: {url}\n\n{focus}\n\n"
+            f"次の項目を調べてください。\n{asks}"
+        ),
+        "max_output_tokens": 8192,
+        "tools": [
+            {"type": "fetch_url", "max_urls": 10},
+            {"type": "web_search", "max_results": 8},
+            {"type": "people_search"},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "autofill", "strict": True, "schema": autofill_schema()},
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        resp = await client.post(
+            PERPLEXITY_AGENT_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+        )
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("error", {}).get("message", resp.text[:300])
+        except ValueError:
+            detail = resp.text[:300]
+        raise RuntimeError(f"Perplexity API エラー（HTTP {resp.status_code}）: {detail}")
+
+    data = resp.json()
+    text = ""
+    for item in data.get("output", []):
+        if item.get("type") != "message":
+            continue
+        for part in item.get("content", []):
+            if part.get("type") == "output_text":
+                text += part.get("text", "")
+    if not text.strip():
+        raise RuntimeError(f"空の応答が返されました（status: {data.get('status')}）")
+
+    usage = data.get("usage") or {}
+    logger.info(
+        "autofill url=%s mode=%s in=%s out=%s cost=%s",
+        url, mode, usage.get("input_tokens"), usage.get("output_tokens"),
+        (usage.get("cost") or {}).get("total_cost"),
+    )
+
+    fields = json.loads(text)
+    return {
+        "company_name": fields.pop("company_name", ""),
+        "fields": fields,
+        "ask_user": AUTOFILL_ASK_USER,
+        "cost": (usage.get("cost") or {}).get("total_cost"),
+    }
+
+
+# ============================================================
 # ストリーミング描画
 # ============================================================
 # result.html のこの位置に、完成したセクションを流し込む <script> を挿入する
@@ -424,6 +551,19 @@ async def evaluate(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/autofill")
+async def autofill(url: str = Form(...), mode: str = Form(default="coo")):
+    """URL から公開情報を調査し、フォームの下書きを JSON で返す"""
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        return JSONResponse(status_code=400, content={"error": "http:// または https:// で始まるURLを入力してください"})
+    try:
+        return JSONResponse(await autofill_from_url(url, mode))
+    except Exception as e:
+        logger.exception("autofill failed: %s", url)
+        return JSONResponse(status_code=502, content={"error": str(e)})
 
 
 @app.get("/health")

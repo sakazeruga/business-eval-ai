@@ -127,6 +127,28 @@
       .position-grid { grid-template-columns: 1fr 1fr; }
     }
 
+    /* AI自動入力 */
+    .af-optional { font-size: .7rem; font-weight: 400; opacity: .6; border: 1px solid currentColor;
+      border-radius: 4px; padding: 1px 6px; vertical-align: middle; margin-left: 6px; }
+    .af-lead { font-size: .85rem; opacity: .75; line-height: 1.7; margin: 0 0 14px; }
+    .af-row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .af-input { flex: 1 1 260px; }
+    .af-btn { flex: 0 0 auto; padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer;
+      background: var(--accent, #4f46e5); color: #fff; font-size: .9rem; }
+    .af-btn:disabled { opacity: .55; cursor: default; }
+    .af-status { font-size: .84rem; margin-top: 12px; line-height: 1.8; }
+    .af-status .af-err { color: #e05252; }
+    .af-badge { display: inline-block; font-size: .68rem; border-radius: 4px; padding: 1px 6px;
+      margin-left: 8px; vertical-align: middle; border: 1px solid currentColor; opacity: .85; }
+    .af-badge.high   { color: #2e9e5b; }
+    .af-badge.medium { color: #c28b1b; }
+    .af-badge.low    { color: #d9742b; }
+    .af-badge.unknown{ color: #999; }
+    .af-filled { outline: 2px solid rgba(46,158,91,.35); outline-offset: 1px; }
+    .af-needs-input { outline: 2px solid rgba(217,116,43,.5); outline-offset: 1px; }
+    .af-src { font-size: .75rem; opacity: .6; }
+    .af-src a { color: inherit; }
+
     /* 送信ボタン */
     .submit-btn {
       width: 100%;
@@ -210,6 +232,20 @@
             </label>
           </div>
         </div>
+      </div>
+
+      <!-- AI自動入力 -->
+      <div class="card">
+        <h2>AI自動入力 <span class="af-optional">任意</span></h2>
+        <p class="af-lead">
+          企業・サービスのWebページURLを入れると、公開情報を調査して下の項目を下書きします。
+          内容は必ず確認・修正してください。公開情報から判断できない項目は空のまま残ります。
+        </p>
+        <div class="af-row">
+          <input type="url" id="af-url" class="af-input" placeholder="https://example.co.jp/">
+          <button type="button" id="af-btn" class="af-btn">調査して下書き</button>
+        </div>
+        <div class="af-status" id="af-status"></div>
       </div>
 
       <!-- 事業構想（複数テキストボックス） -->
@@ -394,6 +430,81 @@
         whyMe.style.display = input.value === 'startup' ? 'block' : 'none';
       });
     });
+
+    // AI自動入力
+    const AF_LABELS = {
+      problem: '解決する課題', solution: 'ソリューション', business_model: 'ビジネスモデル',
+      phase: 'フェーズ', full_commit_members: 'フルコミットメンバー',
+      committable_members: 'コミッタブルメンバー', q2_2_credentials: '保有資格・学位',
+      q2_4_ai_usage: 'AI活用状況'
+    };
+
+    document.getElementById('af-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('af-btn');
+      const statusEl = document.getElementById('af-status');
+      const url = document.getElementById('af-url').value.trim();
+      if (!url) { statusEl.innerHTML = '<span class="af-err">URLを入力してください</span>'; return; }
+
+      btn.disabled = true;
+      const t0 = Date.now();
+      const tick = setInterval(() => {
+        statusEl.textContent = '調査中… ' + Math.round((Date.now() - t0) / 1000) + '秒（30〜60秒かかります）';
+      }, 1000);
+      statusEl.textContent = '調査中…';
+
+      try {
+        const body = new FormData();
+        body.append('url', url);
+        body.append('mode', document.querySelector('input[name=\"mode\"]:checked').value);
+        const res = await fetch('/autofill', { method: 'POST', body });
+        const data = await res.json();
+        clearInterval(tick);
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+
+        let filled = 0, needs = [];
+        for (const [key, info] of Object.entries(data.fields || {})) {
+          const el = document.getElementById(key);
+          if (!el) continue;
+          const val = (info.value || '').trim();
+          if (val && info.confidence !== 'unknown') {
+            el.value = val;
+            el.classList.add('af-filled');
+            filled++;
+          } else {
+            el.classList.add('af-needs-input');
+            needs.push(AF_LABELS[key] || key);
+          }
+        }
+        // 公開情報から取得できない項目は常に利用者に入力してもらう
+        for (const key of Object.keys(data.ask_user || {})) {
+          const el = document.getElementById(key);
+          if (el && !el.value.trim()) {
+            el.classList.add('af-needs-input');
+            needs.push(AF_LABELS[key] || document.querySelector('label[for=\"' + key + '\"]')?.textContent.trim() || key);
+          }
+        }
+
+        let html = '<strong>' + filled + '項目を下書きしました。</strong>';
+        if (data.company_name) html += '<div class=\"af-src\">調査対象: ' + escapeHtml(data.company_name.slice(0, 120)) + '</div>';
+        if (needs.length) html += '<div>要入力（オレンジ枠）: ' + escapeHtml(needs.join('、')) + '</div>';
+        html += '<div class=\"af-src\">内容と出典は必ず確認してください。</div>';
+        statusEl.innerHTML = html;
+
+        const first = document.querySelector('.af-needs-input');
+        if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) {
+        clearInterval(tick);
+        statusEl.innerHTML = '<span class=\"af-err\">自動入力に失敗しました: ' + escapeHtml(String(e.message || e)) + '</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
 
     // フォーム送信時にローディング表示
     document.getElementById('eval-form').addEventListener('submit', () => {
