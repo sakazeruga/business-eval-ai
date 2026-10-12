@@ -4,13 +4,14 @@ OpenRouter 経由でモデルを呼び出す（Phase 2 でモデル切替が容�
 """
 
 import asyncio
+import json
 import logging
 import os
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from openai import OpenAI
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -264,59 +265,77 @@ async def fetch_competitors(business_idea_summary: str) -> str:
         return f"⚠️ 競合調査に失敗しました: {e}"
 
 
-async def evaluate_startup(context: str) -> dict[str, str]:
-    """スタートアップ評価モード: 全セクションを並列実行する"""
-    section_prompts = {
-        "why_me":     prompt_why_me(context),
-        "why_now":    prompt_why_now(context),
-        "vrio":       prompt_vrio(context),
-        "marketing":  prompt_marketing(context),
-        "operations": prompt_operations(context),
-        "cashflow":   prompt_cashflow(context),
-        "npv_exit":   prompt_npv_exit(context),
+# 表示順。クロスSWOT は全セクションの結果を要約して渡すため必ず最後。
+SECTION_ORDER = {
+    "startup": ["why_me", "why_now", "vrio", "marketing", "operations", "cashflow", "npv_exit"],
+    "coo":     ["coo_diagnosis", "vrio", "cashflow"],
+}
+
+
+def section_prompts_for(mode: str, context: str) -> dict[str, str]:
+    """モードごとの（クロスSWOT を除く）セクションプロンプトを表示順で返す"""
+    builders = {
+        "why_me":        prompt_why_me,
+        "why_now":       prompt_why_now,
+        "vrio":          prompt_vrio,
+        "marketing":     prompt_marketing,
+        "operations":    prompt_operations,
+        "cashflow":      prompt_cashflow,
+        "npv_exit":      prompt_npv_exit,
+        "coo_diagnosis": prompt_coo_diagnosis,
     }
-
-    results_list = await asyncio.gather(
-        *[call_section(p, k) for k, p in section_prompts.items()],
-        return_exceptions=True,
-    )
-
-    results = {}
-    for key, result in zip(section_prompts.keys(), results_list):
-        results[key] = str(result) if isinstance(result, Exception) else result
-
-    # クロスSWOT は全セクション結果を要約して渡す
-    summary = "\n\n".join(f"=== {k.upper()} ===\n{v[:800]}" for k, v in results.items())
-    results["cross_swot"] = await call_section(
-        prompt_cross_swot(f"{context}\n\n## 各セクション評価サマリー\n{summary}"),
-        "cross_swot",
-    )
-    return results
+    keys = SECTION_ORDER["startup" if mode == "startup" else "coo"]
+    return {k: builders[k](context) for k in keys}
 
 
-async def evaluate_coo(context: str) -> dict[str, str]:
-    """COOターンアラウンドモード"""
-    section_prompts = {
-        "coo_diagnosis": prompt_coo_diagnosis(context),
-        "vrio":          prompt_vrio(context),
-        "cashflow":      prompt_cashflow(context),
-    }
+async def evaluate_sections(mode: str, context: str):
+    """セクションを並列実行し、完成した順に (key, text) を yield する。
 
-    results_list = await asyncio.gather(
-        *[call_section(p, k) for k, p in section_prompts.items()],
-        return_exceptions=True,
-    )
+    クロスSWOT だけは全セクションの要約を入力に取るため、最後に実行する。
+    """
+    section_prompts = section_prompts_for(mode, context)
 
-    results = {}
-    for key, result in zip(section_prompts.keys(), results_list):
-        results[key] = str(result) if isinstance(result, Exception) else result
+    async def run(key: str, prompt_text: str) -> tuple[str, str]:
+        try:
+            return key, await call_section(prompt_text, key)
+        except Exception as e:  # 1セクションの失敗で全体を止めない
+            logger.exception("section failed: %s", key)
+            return key, f"⚠️ {key} の評価に失敗しました: {e}"
+
+    tasks = [asyncio.create_task(run(k, pr)) for k, pr in section_prompts.items()]
+
+    # 差し込み先は data-section で決まるため、表示順ではなく完了順に流す。
+    # 遅いセクション（Web検索系）が先に終わった軽いセクションを足止めしない。
+    results: dict[str, str] = {}
+    for completed in asyncio.as_completed(tasks):
+        key, text = await completed
+        results[key] = text
+        yield key, text
 
     summary = "\n\n".join(f"=== {k.upper()} ===\n{v[:800]}" for k, v in results.items())
-    results["cross_swot"] = await call_section(
-        prompt_cross_swot(f"{context}\n\n## 各セクション評価サマリー\n{summary}"),
-        "cross_swot",
-    )
-    return results
+    try:
+        cross = await call_section(
+            prompt_cross_swot(f"{context}\n\n## 各セクション評価サマリー\n{summary}"),
+            "cross_swot",
+        )
+    except Exception as e:
+        logger.exception("cross_swot failed")
+        cross = f"⚠️ クロスSWOT の生成に失敗しました: {e}"
+    yield "cross_swot", cross
+
+
+# ============================================================
+# ストリーミング描画
+# ============================================================
+# result.html のこの位置に、完成したセクションを流し込む <script> を挿入する
+STREAM_SENTINEL = "<!--STREAM_INSERT-->"
+
+
+def fill_script(key: str, markdown: str) -> str:
+    """1セクション分の本文をブラウザへ送る <script> を生成する"""
+    # 本文中の "</script>" でタグが閉じるのを防ぐため "<" を退避する
+    payload = json.dumps(markdown, ensure_ascii=False).replace("<", "\\u003c")
+    return f"<script>fillSection({json.dumps(key)}, {payload});</script>\n"
 
 
 # ============================================================
@@ -368,24 +387,41 @@ async def evaluate(
 
     context = build_context(business_idea, answers)
 
-    competitors = await fetch_competitors(idea_summary)
-    context_with_competitors = context + f"\n\n## 主要競合（AI自動調査）\n{competitors}"
+    # 画面に出るカード数。競合調査カードは startup モードのみ表示される
+    total = len(SECTION_ORDER["startup" if mode == "startup" else "coo"]) + 1
+    if mode == "startup":
+        total += 1
 
-    results = (
-        await evaluate_startup(context_with_competitors)
-        if mode == "startup"
-        else await evaluate_coo(context_with_competitors)
-    )
-    results["competitors"] = competitors
+    async def generate():
+        page = templates.get_template("result.html").render(
+            request=request,
+            mode=mode,
+            business_idea=business_idea,
+            results={},
+            models=MODELS,
+            streaming=True,
+            total_sections=total,
+        )
+        head, _, tail = page.partition(STREAM_SENTINEL)
+        yield head
 
-    return templates.TemplateResponse(
-        request,
-        "result.html",
-        {
-            "mode": mode,
-            "business_idea": business_idea,
-            "results": results,
-            "models": MODELS,
+        competitors = await fetch_competitors(idea_summary)
+        yield fill_script("competitors", competitors)
+
+        ctx = context + f"\n\n## 主要競合（AI自動調査）\n{competitors}"
+        async for key, text in evaluate_sections(mode, ctx):
+            yield fill_script(key, text)
+
+        yield "<script>finishStreaming();</script>"
+        yield tail
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            # プロキシのバッファリングを無効化（効かないと逐次表示にならない）
+            "X-Accel-Buffering": "no",
         },
     )
 

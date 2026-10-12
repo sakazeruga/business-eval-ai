@@ -315,6 +315,26 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
+<style>
+  /* ストリーミング中の進捗表示 */
+  .stream-status { background: var(--card, #fff); border: 1px solid rgba(128,128,128,.25);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 20px; }
+  .stream-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .stream-text { flex: 1 1 200px; font-size: .9rem; }
+  .stream-count { font-variant-numeric: tabular-nums; font-size: .85rem; opacity: .75; }
+  .spinner-sm { width: 16px; height: 16px; border: 2px solid rgba(128,128,128,.3);
+    border-top-color: currentColor; border-radius: 50%; animation: spin 0.9s linear infinite; flex: 0 0 auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .stream-bar { height: 4px; border-radius: 2px; background: rgba(128,128,128,.2); margin-top: 10px; overflow: hidden; }
+  .stream-bar-fill { height: 100%; width: 0; background: currentColor; opacity: .6; transition: width .4s ease; }
+  .stream-note { font-size: .78rem; opacity: .6; margin-top: 8px; }
+  .stream-status.done { display: none; }
+  /* 未到着セクションのプレースホルダ */
+  .section.pending .section-body::before { content: "評価中…"; opacity: .5; font-size: .88rem; }
+  .section.pending .toggle-icon { opacity: .3; }
+  @media print { .stream-status { display: none; } }
+</style>
+
 <div class="container">
 
   <header>
@@ -326,6 +346,18 @@
       {% if mode == 'startup' %}🚀 スタートアップ評価モード{% else %}🔧 COOターンアラウンドモード{% endif %}
     </span>
   </header>
+
+  {% if streaming %}
+  <div class="stream-status" id="stream-status">
+    <div class="stream-row">
+      <div class="spinner-sm"></div>
+      <span class="stream-text">AIが評価中です… 完成したセクションから順に表示されます</span>
+      <span class="stream-count"><span id="stream-done">0</span> / {{ total_sections }}</span>
+    </div>
+    <div class="stream-bar"><div class="stream-bar-fill" id="stream-bar"></div></div>
+    <div class="stream-note">このページを開いたままにしてください（全体で 1〜2 分かかります）</div>
+  </div>
+  {% endif %}
 
   <!-- BUSINESS CONCEPT -->
   <div class="idea-box">
@@ -392,7 +424,7 @@
         <span class="model-tag">{{ models.competitors }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.competitors | default('取得できませんでした') }}</div>
+      <div class="section-body" data-section="competitors">{% if streaming %}{% else %}{{ results.competitors | default('取得できませんでした') }}{% endif %}</div>
     </div>
 
     <div class="section" id="why-me" data-category="analysis">
@@ -403,7 +435,7 @@
         <span class="model-tag">{{ models.why_me }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.why_me | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="why_me">{% if streaming %}{% else %}{{ results.why_me | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="why-now" data-category="analysis">
@@ -414,7 +446,7 @@
         <span class="model-tag">{{ models.why_now }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.why_now | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="why_now">{% if streaming %}{% else %}{{ results.why_now | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="vrio" data-category="analysis">
@@ -425,7 +457,7 @@
         <span class="model-tag">{{ models.vrio }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.vrio | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="vrio">{% if streaming %}{% else %}{{ results.vrio | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="marketing" data-category="strategy">
@@ -436,7 +468,7 @@
         <span class="model-tag">{{ models.marketing }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.marketing | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="marketing">{% if streaming %}{% else %}{{ results.marketing | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="operations" data-category="strategy">
@@ -447,7 +479,7 @@
         <span class="model-tag">{{ models.operations }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.operations | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="operations">{% if streaming %}{% else %}{{ results.operations | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="cashflow" data-category="financial">
@@ -458,7 +490,7 @@
         <span class="model-tag">{{ models.cashflow }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.cashflow | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="cashflow">{% if streaming %}{% else %}{{ results.cashflow | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="npv-exit" data-category="financial">
@@ -469,7 +501,7 @@
         <span class="model-tag">{{ models.npv_exit }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.npv_exit | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="npv_exit">{% if streaming %}{% else %}{{ results.npv_exit | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
   {% else %}
@@ -482,7 +514,7 @@
         <span class="model-tag">{{ models.coo_diagnosis }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.coo_diagnosis | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="coo_diagnosis">{% if streaming %}{% else %}{{ results.coo_diagnosis | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="vrio" data-category="analysis">
@@ -493,7 +525,7 @@
         <span class="model-tag">{{ models.vrio }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.vrio | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="vrio">{% if streaming %}{% else %}{{ results.vrio | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
     <div class="section" id="cashflow" data-category="financial">
@@ -504,7 +536,7 @@
         <span class="model-tag">{{ models.cashflow }}</span>
         <span class="toggle-icon">▼</span>
       </div>
-      <div class="section-body">{{ results.cashflow | default('評価結果がありません') }}</div>
+      <div class="section-body" data-section="cashflow">{% if streaming %}{% else %}{{ results.cashflow | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
   {% endif %}
@@ -521,7 +553,7 @@
       <span class="model-tag">{{ models.cross_swot }}</span>
       <span class="toggle-icon">▼</span>
     </div>
-    <div class="section-body">{{ results.cross_swot | default('評価結果がありません') }}</div>
+    <div class="section-body" data-section="cross_swot">{% if streaming %}{% else %}{{ results.cross_swot | default('評価結果がありません') }}{% endif %}</div>
   </div>
 
   <div class="action-bar">
@@ -562,11 +594,41 @@
   // Python側のデータをJSONで安全に受け取る（シングルクォート問題を回避）
   const IDEA = {{ business_idea | tojson }};
 
-  // レンダリング前に生Markdownを保存してからHTMLに変換
-  document.querySelectorAll('.section-body').forEach(el => {
-    el.dataset.markdown = el.textContent.trim();
-    el.innerHTML = marked.parse(el.dataset.markdown);
-  });
+  const STREAMING = {% if streaming %}true{% else %}false{% endif %};
+  const TOTAL_SECTIONS = {{ total_sections | default(0) }};
+  let doneSections = 0;
+
+  if (STREAMING) {
+    // 本文は後から fillSection() で流し込まれる
+    document.querySelectorAll('.section-body').forEach(el => {
+      el.closest('.section').classList.add('pending');
+    });
+  } else {
+    // レンダリング前に生Markdownを保存してからHTMLに変換
+    document.querySelectorAll('.section-body').forEach(el => {
+      el.dataset.markdown = el.textContent.trim();
+      el.innerHTML = marked.parse(el.dataset.markdown);
+    });
+  }
+
+  // ストリーミング中、サーバーから1セクションずつ呼ばれる
+  function fillSection(key, markdown) {
+    const el = document.querySelector('.section-body[data-section="' + key + '"]');
+    if (!el) return;
+    el.dataset.markdown = markdown;
+    el.innerHTML = marked.parse(markdown);
+    el.closest('.section').classList.remove('pending');
+    doneSections++;
+    const n = document.getElementById('stream-done');
+    const bar = document.getElementById('stream-bar');
+    if (n) n.textContent = doneSections;
+    if (bar && TOTAL_SECTIONS) bar.style.width = (doneSections / TOTAL_SECTIONS * 100) + '%';
+  }
+
+  function finishStreaming() {
+    const s = document.getElementById('stream-status');
+    if (s) s.classList.add('done');
+  }
 
   function toggleSection(header) {
     header.parentElement.classList.toggle('collapsed');
@@ -644,5 +706,6 @@
     URL.revokeObjectURL(url);
   }
 </script>
+<!--STREAM_INSERT-->
 </body>
 </html>
