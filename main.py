@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -553,12 +554,36 @@ async def evaluate(
     )
 
 
+def normalize_url(raw: str) -> str:
+    """入力されたURLを正規化する。スキーム省略時は https:// を補う。
+
+    不正な場合は ValueError を送出する。
+    """
+    raw = raw.strip().strip("<>\"'")
+    if not raw:
+        raise ValueError("URLを入力してください")
+    if "://" not in raw:
+        raw = "https://" + raw.lstrip("/")
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("http または https のURLを入力してください")
+    host = (parsed.hostname or "").lower()
+    if "." not in host or host.endswith("."):
+        raise ValueError("ドメイン名が正しくありません（例: example.co.jp）")
+    # 社内ネットワークやループバックの調査依頼は受け付けない
+    if host in ("localhost",) or host.endswith(".local") or host.startswith(("127.", "10.", "192.168.", "169.254.")):
+        raise ValueError("外部に公開されているURLを指定してください")
+    return parsed.geturl()
+
+
 @app.post("/autofill")
 async def autofill(url: str = Form(...), mode: str = Form(default="coo")):
     """URL から公開情報を調査し、フォームの下書きを JSON で返す"""
-    url = url.strip()
-    if not url.startswith(("http://", "https://")):
-        return JSONResponse(status_code=400, content={"error": "http:// または https:// で始まるURLを入力してください"})
+    try:
+        url = normalize_url(url)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     try:
         return JSONResponse(await autofill_from_url(url, mode))
     except Exception as e:

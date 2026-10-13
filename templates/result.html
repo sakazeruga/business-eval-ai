@@ -235,7 +235,9 @@
       border: 1px solid var(--border);
     }
     .btn-secondary:hover { color: var(--text); border-color: var(--accent); }
-    .btn-secondary a { color: inherit; text-decoration: none; }
+    .btn-secondary { text-decoration: none; }
+    a.action-btn { display: inline-flex; align-items: center; justify-content: center;
+      text-decoration: none; box-sizing: border-box; }
 
     /* 印刷 */
     @media print {
@@ -563,9 +565,7 @@
     <button class="action-btn btn-ai" onclick="openMdModal()">
       🤖 AI壁打ち用エクスポート
     </button>
-    <button class="action-btn btn-secondary">
-      <a href="/">← 再評価する</a>
-    </button>
+    <a href="/" class="action-btn btn-secondary">← 再評価する</a>
   </div>
 
 </div>
