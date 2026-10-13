@@ -19,11 +19,15 @@
     font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
     line-height: 1.75; }
   .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 60px; }
-  header { margin-bottom: 20px; }
-  h1 { font-size: 1.3rem; margin: 0 0 6px; }
-  .lead { color: var(--muted); font-size: .88rem; margin: 0; }
-  .back { color: var(--muted); font-size: .82rem; text-decoration: none; }
-  .back:hover { color: var(--text); }
+  header { margin-bottom: 26px; }
+  h1 { font-size: 1.9rem; font-weight: 700; letter-spacing: .02em;
+       margin: 0 0 10px; line-height: 1.35; color: var(--text); }
+  h1 .bolt { color: var(--accent); }
+  .lead { color: var(--text); opacity: .8; font-size: .95rem; margin: 0 0 12px; }
+  .back { display: inline-block; color: var(--muted); font-size: .85rem;
+          text-decoration: none; border-bottom: 1px solid var(--line); padding-bottom: 1px; }
+  .back:hover { color: var(--text); border-color: var(--accent); }
+  @media (max-width: 480px) { h1 { font-size: 1.6rem; } }
 
   .card { background: var(--card); border: 1px solid var(--line);
     border-radius: 12px; padding: 18px; margin-bottom: 16px; }
@@ -59,6 +63,15 @@
     border-left: 3px solid var(--ok); padding-left: 10px; margin-top: 8px; }
   details summary { cursor: pointer; font-size: .84rem; color: var(--muted); }
   .hidden { display: none; }
+
+  /* QRスキャナ */
+  .btn-ghost { background: transparent; color: var(--text);
+    border: 1px solid var(--line); }
+  .btn-ghost:hover:not(:disabled) { background: transparent; border-color: var(--accent); }
+  #scanner { margin-top: 14px; }
+  #scan-video { width: 100%; max-width: 420px; border-radius: 10px;
+    background: #000; display: block; }
+  .scan-hint { color: var(--muted); font-size: .82rem; margin-top: 8px; }
   .spin { display: inline-block; width: 14px; height: 14px; vertical-align: -2px;
     border: 2px solid var(--line); border-top-color: var(--text);
     border-radius: 50%; animation: s .9s linear infinite; }
@@ -68,7 +81,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>⚡ クイック審査</h1>
+    <h1><span class="bolt">⚡</span> クイック審査</h1>
     <p class="lead">URLを入れると公開情報を調査し、足りない点だけAIが質問します。揃った時点で評価に進みます。</p>
     <a class="back" href="/">← 詳細フォームで入力する</a>
   </header>
@@ -88,6 +101,13 @@
     <div class="row">
       <input type="text" inputmode="url" id="url" placeholder="example.co.jp（https:// は省略可）">
       <button id="start-btn">調査を開始</button>
+      <button id="scan-btn" class="btn-ghost" type="button">QRを読み取る</button>
+    </div>
+    <div id="scanner" class="hidden">
+      <video id="scan-video" playsinline muted></video>
+      <div class="scan-hint">
+        QRコードをカメラに向けてください。<a href="#" id="scan-stop">読み取りを中止</a>
+      </div>
     </div>
     <div class="sysnote" id="url-status" style="margin-top:10px"></div>
   </div>
@@ -120,6 +140,7 @@
   <input type="hidden" name="extra_context" id="f-extra">
 </form>
 
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
   let STATE = null, CURRENT_Q = '', SUMMARY = {};
 
@@ -191,6 +212,91 @@
       setBusy($('start-btn'), false, '調査を開始');
     }
   });
+
+  // --- QR読み取り ---
+  // 対応ブラウザでは BarcodeDetector、無ければ jsQR にフォールバックする。
+  // カメラは HTTPS（または localhost）でのみ利用できる。
+  let scanStream = null, scanTimer = null;
+
+  async function startScan() {
+    const video = $('scan-video');
+    if (!('BarcodeDetector' in window) && typeof jsQR !== 'function') {
+      $('url-status').innerHTML = '<span class="err">このブラウザではQR読み取りを利用できません。'
+        + 'URLを直接入力してください。</span>';
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      $('url-status').innerHTML = '<span class="err">カメラを利用できない環境です（HTTPS接続が必要です）。'
+        + 'URLを直接入力してください。</span>';
+      return;
+    }
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }, audio: false
+      });
+    } catch (e) {
+      $('url-status').innerHTML = '<span class="err">カメラを利用できません: ' + esc(e.message || e)
+        + '（HTTPS接続と、ブラウザのカメラ許可が必要です）</span>';
+      return;
+    }
+    video.srcObject = scanStream;
+    await video.play();
+    $('scanner').classList.remove('hidden');
+    $('scan-btn').textContent = '読み取り中…';
+    $('scan-btn').disabled = true;
+
+    const detector = ('BarcodeDetector' in window)
+      ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    scanTimer = setInterval(async () => {
+      if (!video.videoWidth) return;
+      let text = null;
+      try {
+        if (detector) {
+          const codes = await detector.detect(video);
+          if (codes.length) text = codes[0].rawValue;
+        } else if (window.jsQR) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(img.data, img.width, img.height);
+          if (code) text = code.data;
+        }
+      } catch (e) { /* 読み取り失敗は次フレームで再試行 */ }
+      if (text) onScanned(text);
+    }, 300);
+  }
+
+  function stopScan() {
+    if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+    $('scan-video').srcObject = null;
+    $('scanner').classList.add('hidden');
+    $('scan-btn').textContent = 'QRを読み取る';
+    $('scan-btn').disabled = false;
+  }
+
+  function onScanned(text) {
+    stopScan();
+    // QRにはURL以外（vCard等）が入ることもあるため、URLらしき部分を取り出す
+    const m = String(text).match(/https?:\/\/[^\s"'<>]+/i)
+           || String(text).match(/[a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)+(\/[^\s"'<>]*)?/i);
+    if (!m) {
+      $('url-status').innerHTML = '<span class="err">QRにURLが含まれていませんでした: '
+        + esc(String(text).slice(0, 60)) + '</span>';
+      return;
+    }
+    $('url').value = m[0];
+    $('url-status').textContent = 'QRを読み取りました。調査を開始します…';
+    $('start-btn').click();
+  }
+
+  $('scan-btn').addEventListener('click', startScan);
+  $('scan-stop').addEventListener('click', e => { e.preventDefault(); stopScan(); });
+  window.addEventListener('pagehide', stopScan);
 
   // --- STEP 2 ---
   $('send-btn').addEventListener('click', async () => {
