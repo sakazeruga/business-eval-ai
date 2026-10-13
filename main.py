@@ -63,6 +63,10 @@ HAIKU = "anthropic/claude-haiku-5.5"
 SONNET = "anthropic/claude-sonnet-5.5"
 LUNA = "openai/gpt-6-luna"
 
+# レポートへの追加質問用。1問ごとにレポート全文（約15kトークン）を送るため、
+# 単価の低い Haiku を既定にする（Sonnet にすると1問あたり約20倍）。
+CHAT_MODEL = HAIKU
+
 # Perplexity Agent API のモデルID（provider/model、バージョンはハイフン区切り）
 SEARCH_MODELS = {
     "competitors": "anthropic/claude-haiku-5-5",
@@ -767,6 +771,79 @@ async def intake_reply(state: str = Form(...), question: str = Form(...), answer
         return JSONResponse(status_code=502, content={"error": str(e)})
 
     return JSONResponse({"state": st, **assessment})
+
+
+REPORT_CHAT_SYSTEM = """あなたは事業投資評価の専門家です。
+利用者が受け取った評価レポートについて、追加の質問に答えます。
+
+回答の原則:
+- レポートに書かれている内容を根拠に答えること。どのセクションの記述かを示す
+- レポートに無い事柄を聞かれたら、推測で補わず「レポートでは扱っていない」と述べた上で、
+  一般論ではなくこの事業の条件に即して何を調べれば判断できるかを示すこと
+- 反証や懸念を述べる場合は、この事業に固有の根拠と定量的インパクトを伴うものに限ること
+- 「一般的に」「多くの場合」などの一般論的ヘッジは使わないこと
+- Markdown で、簡潔に答えること"""
+
+REPORT_CHAT_MAX_HISTORY = 12
+
+
+@app.post("/chat")
+async def report_chat(
+    report: str = Form(...),
+    question: str = Form(...),
+    history: str = Form(default="[]"),
+):
+    """評価レポートについての追加質問に答える"""
+    try:
+        past = json.loads(history)[-REPORT_CHAT_MAX_HISTORY:]
+    except json.JSONDecodeError:
+        past = []
+
+    messages = [
+        {"role": "system", "content": REPORT_CHAT_SYSTEM},
+        {"role": "user", "content": f"## 評価レポート全文\n{report}"},
+        {"role": "assistant", "content": "レポートを読みました。質問をどうぞ。"},
+    ]
+    for turn in past:
+        role = turn.get("role")
+        if role in ("user", "assistant") and turn.get("content"):
+            messages.append({"role": role, "content": turn["content"]})
+    messages.append({"role": "user", "content": question})
+
+    client = get_client()
+
+    def _call() -> str:
+        kwargs = dict(
+            model=CHAT_MODEL, max_tokens=3072, messages=messages,
+            extra_body={"reasoning": {"enabled": False}},
+        )
+        if OPENROUTER_ZDR:
+            kwargs["extra_body"]["provider"] = {"zdr": True}
+        r = client.chat.completions.create(**kwargs)
+        usage = getattr(r, "usage", None)
+        if usage is not None:
+            logger.info("chat in=%s out=%s", usage.prompt_tokens, usage.completion_tokens)
+        return r.choices[0].message.content or ""
+
+    try:
+        loop = asyncio.get_event_loop()
+        answer = await loop.run_in_executor(None, _call)
+    except Exception as e:
+        logger.exception("report_chat failed")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+    if not answer.strip():
+        return JSONResponse(status_code=502, content={"error": "空の応答が返されました"})
+    return JSONResponse({"answer": answer})
+
+
+@app.get("/report", response_class=HTMLResponse)
+async def saved_report(request: Request):
+    """保存済みレポートを表示する（中身はブラウザの localStorage から復元）"""
+    return templates.TemplateResponse(
+        request, "result.html",
+        {"mode": "startup", "business_idea": {}, "results": {}, "models": MODELS, "restore": True},
+    )
 
 
 @app.post("/autofill")

@@ -155,6 +155,20 @@
       .quick-cta-arrow { display: none; }
     }
 
+    /* 保存したレポート */
+    .hidden { display: none; }
+    .saved-list { list-style: none; padding: 0; margin: 0; }
+    .saved-list li { display: flex; align-items: center; gap: 10px;
+      padding: 9px 0; border-bottom: 1px solid var(--border, rgba(128,128,128,.2)); }
+    .saved-list li:last-child { border-bottom: none; }
+    .saved-list a { flex: 1; color: inherit; text-decoration: none; font-size: .9rem; }
+    .saved-list a:hover { text-decoration: underline; }
+    .saved-meta { font-size: .76rem; opacity: .6; white-space: nowrap; }
+    .saved-del { background: transparent; border: none; color: inherit;
+      opacity: .45; cursor: pointer; font-size: .85rem; padding: 2px 6px; }
+    .saved-del:hover { opacity: 1; color: #e05252; }
+    .saved-hint { font-size: .78rem; opacity: .6; margin-top: 10px; }
+
     /* AI自動入力 */
     .af-optional { font-size: .7rem; font-weight: 400; opacity: .6; border: 1px solid currentColor;
       border-radius: 4px; padding: 1px 6px; vertical-align: middle; margin-left: 6px; }
@@ -246,6 +260,13 @@
       </div>
       <div class="quick-cta-arrow">→</div>
     </a>
+
+    <!-- このブラウザに保存されたレポート -->
+    <div class="card hidden" id="saved-card">
+      <h2>保存したレポート</h2>
+      <ul class="saved-list" id="saved-list"></ul>
+      <div class="saved-hint">このブラウザにのみ保存されます。他の端末からは開けません。</div>
+    </div>
 
     <div class="quick-or"><span>または、下のフォームに自分で入力する</span></div>
 
@@ -460,6 +481,44 @@
   </div>
 
   <script>
+    // 保存したレポート一覧（localStorage）
+    const STORE_KEY = 'bizeval.reports';
+
+    function renderSaved() {
+      let list = [];
+      try { list = JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); } catch (e) { list = []; }
+      const card = document.getElementById('saved-card');
+      const ul = document.getElementById('saved-list');
+      if (!list.length) { card.classList.add('hidden'); return; }
+      card.classList.remove('hidden');
+      ul.innerHTML = '';
+      list.forEach(rec => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = '/report?id=' + encodeURIComponent(rec.id);
+        const label = (rec.idea && rec.idea.problem) ? rec.idea.problem : '（課題未入力）';
+        a.textContent = (rec.mode === 'startup' ? '🚀 ' : '🔧 ') + label.slice(0, 60);
+        const meta = document.createElement('span');
+        meta.className = 'saved-meta';
+        meta.textContent = new Date(rec.savedAt).toLocaleString('ja-JP',
+          { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const del = document.createElement('button');
+        del.className = 'saved-del';
+        del.type = 'button';
+        del.textContent = '✕';
+        del.title = 'この保存を削除';
+        del.addEventListener('click', () => {
+          if (!confirm('この保存済みレポートを削除しますか？')) return;
+          const next = list.filter(r => r.id !== rec.id);
+          localStorage.setItem(STORE_KEY, JSON.stringify(next));
+          renderSaved();
+        });
+        li.append(a, meta, del);
+        ul.appendChild(li);
+      });
+    }
+    renderSaved();
+
     // モード切替でWhy Meセクションを表示/非表示
     const modeInputs = document.querySelectorAll('input[name="mode"]');
 

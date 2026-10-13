@@ -209,6 +209,31 @@
 
     /* アクションフッター */
     .action-bar { display: flex; gap: 1rem; margin-top: 2rem; flex-wrap: wrap; }
+
+    /* レポートへの追加質問 */
+    .chat-box { background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1.1rem 1.25rem; margin-top: 2rem; }
+    .chat-title { font-size: 0.95rem; margin: 0 0 0.9rem; }
+    .chat-log:empty { display: none; }
+    .chat-log { margin-bottom: 0.9rem; }
+    .chat-turn { margin-bottom: 0.9rem; font-size: 0.88rem; line-height: 1.8; }
+    .chat-turn.me { text-align: right; }
+    .chat-turn .b { display: inline-block; text-align: left; max-width: 92%;
+      padding: 0.6rem 0.9rem; border-radius: 9px; border: 1px solid var(--border); }
+    .chat-turn.me .b { background: rgba(127,127,127,.08); white-space: pre-wrap; }
+    .chat-turn.ai .b { background: transparent; }
+    .chat-turn.ai .b > :first-child { margin-top: 0; }
+    .chat-turn.ai .b > :last-child { margin-bottom: 0; }
+    .chat-input-row { display: flex; gap: 0.6rem; align-items: flex-end; flex-wrap: wrap; }
+    .chat-input-row textarea { flex: 1 1 240px; background: transparent; color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.75rem;
+      font: inherit; font-size: 0.88rem; resize: vertical; }
+    .chat-send { padding: 0.65rem 1.2rem; border: none; border-radius: 8px;
+      background: var(--accent); color: #fff; font-size: 0.88rem; cursor: pointer; font-family: inherit; }
+    .chat-send:disabled { opacity: .5; cursor: default; }
+    .chat-err { color: #e05252; font-size: 0.82rem; margin-top: 0.5rem; }
+    .saved-note { font-size: 0.8rem; color: var(--muted); margin-top: 0.6rem; }
+    @media print { .chat-box { display: none; } }
     .action-btn {
       flex: 1; min-width: 140px;
       text-align: center;
@@ -365,28 +390,28 @@
   <div class="idea-box">
     <strong>BUSINESS CONCEPT</strong>
     <div class="idea-grid">
-      {% if business_idea.problem %}
+      {% if business_idea.problem or restore %}
       <div>
         <div class="idea-field-label">課題</div>
-        <div class="idea-field-value">{{ business_idea.problem }}</div>
+        <div class="idea-field-value" data-idea="problem">{{ business_idea.problem }}</div>
       </div>
       {% endif %}
-      {% if business_idea.solution %}
+      {% if business_idea.solution or restore %}
       <div>
         <div class="idea-field-label">ソリューション</div>
-        <div class="idea-field-value">{{ business_idea.solution }}</div>
+        <div class="idea-field-value" data-idea="solution">{{ business_idea.solution }}</div>
       </div>
       {% endif %}
-      {% if business_idea.business_model %}
+      {% if business_idea.business_model or restore %}
       <div>
         <div class="idea-field-label">ビジネスモデル</div>
-        <div class="idea-field-value">{{ business_idea.business_model }}</div>
+        <div class="idea-field-value" data-idea="business_model">{{ business_idea.business_model }}</div>
       </div>
       {% endif %}
-      {% if business_idea.phase %}
+      {% if business_idea.phase or restore %}
       <div>
         <div class="idea-field-label">フェーズ</div>
-        <div class="idea-field-value">{{ business_idea.phase }}</div>
+        <div class="idea-field-value" data-idea="phase">{{ business_idea.phase }}</div>
       </div>
       {% endif %}
     </div>
@@ -416,7 +441,9 @@
   </div>
 
   <!-- セクション出力 -->
-  {% if mode == 'startup' %}
+  {# 保存済みレポートの復元時はモードが不明なため、両モードのセクションを描画し、
+     内容が無いものはクライアント側で取り除く #}
+  {% if mode == 'startup' or restore %}
 
     <div class="section" id="competitors" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
@@ -505,8 +532,8 @@
       </div>
       <div class="section-body" data-section="npv_exit">{% if streaming %}{% else %}{{ results.npv_exit | default('評価結果がありません') }}{% endif %}</div>
     </div>
-
-  {% else %}
+  {% endif %}
+  {% if mode != 'startup' or restore %}
 
     <div class="section" id="coo-diagnosis" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
@@ -519,6 +546,7 @@
       <div class="section-body" data-section="coo_diagnosis">{% if streaming %}{% else %}{{ results.coo_diagnosis | default('評価結果がありません') }}{% endif %}</div>
     </div>
 
+    {% if not restore %}
     <div class="section" id="vrio" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-icon">🏆</span>
@@ -540,7 +568,7 @@
       </div>
       <div class="section-body" data-section="cashflow">{% if streaming %}{% else %}{{ results.cashflow | default('評価結果がありません') }}{% endif %}</div>
     </div>
-
+    {% endif %}
   {% endif %}
 
   <!-- クロスSWOT（共通） -->
@@ -556,6 +584,18 @@
       <span class="toggle-icon">▼</span>
     </div>
     <div class="section-body" data-section="cross_swot">{% if streaming %}{% else %}{{ results.cross_swot | default('評価結果がありません') }}{% endif %}</div>
+  </div>
+
+  <!-- レポートへの追加質問 -->
+  <div class="chat-box" id="chat-box">
+    <h3 class="chat-title">💬 このレポートについて質問する</h3>
+    <div class="chat-log" id="chat-log"></div>
+    <div class="chat-input-row">
+      <textarea id="chat-q" rows="2"
+        placeholder="例: NPVの前提で一番危ういのはどれ？ / 第1手を今週やるなら何から？"></textarea>
+      <button class="chat-send" id="chat-send">送信</button>
+    </div>
+    <div class="chat-err" id="chat-err"></div>
   </div>
 
   <div class="action-bar">
@@ -595,12 +635,18 @@
   const IDEA = {{ business_idea | tojson }};
 
   const STREAMING = {% if streaming %}true{% else %}false{% endif %};
+  const RESTORE = {% if restore %}true{% else %}false{% endif %};
+  const MODE = {{ mode | tojson }};
+  const STORE_KEY = 'bizeval.reports';
+  const STORE_MAX = 20;
   const TOTAL_SECTIONS = {{ total_sections | default(0) }};
   let doneSections = 0;
 
-  if (STREAMING) {
-    // 本文は後から fillSection() で流し込まれる
+  if (STREAMING || RESTORE) {
+    // 本文は後から fillSection() / restoreReport() で流し込まれる。
+    // 既定文（「評価結果がありません」）を markdown として取り込まないようにする。
     document.querySelectorAll('.section-body').forEach(el => {
+      el.textContent = '';
       el.closest('.section').classList.add('pending');
     });
   } else {
@@ -628,7 +674,162 @@
   function finishStreaming() {
     const s = document.getElementById('stream-status');
     if (s) s.classList.add('done');
+    saveReport();
   }
+
+  // --- セッション保存（ブラウザのlocalStorage。サーバーには保存しない） ---
+  function loadStore() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); }
+    catch (e) { return []; }
+  }
+
+  function saveReport() {
+    const sections = {};
+    document.querySelectorAll('.section-body[data-section]').forEach(el => {
+      if (el.dataset.markdown) sections[el.dataset.section] = el.dataset.markdown;
+    });
+    if (!Object.keys(sections).length) return;
+    const rec = {
+      id: 'r' + Date.now().toString(36),
+      savedAt: new Date().toISOString(),
+      mode: MODE, idea: IDEA, sections: sections,
+    };
+    try {
+      const list = loadStore();
+      list.unshift(rec);
+      localStorage.setItem(STORE_KEY, JSON.stringify(list.slice(0, STORE_MAX)));
+      const bar = document.querySelector('.action-bar');
+      if (bar) {
+        const n = document.createElement('div');
+        n.className = 'saved-note';
+        n.textContent = 'このレポートをこのブラウザに保存しました（トップの「保存したレポート」から開けます）';
+        bar.insertAdjacentElement('afterend', n);
+      }
+    } catch (e) {
+      console.warn('保存できませんでした', e);
+    }
+  }
+
+  function restoreReport() {
+    const id = new URLSearchParams(location.search).get('id');
+    const rec = loadStore().find(r => r.id === id);
+    if (!rec) {
+      document.querySelector('.container').insertAdjacentHTML('afterbegin',
+        '<p>保存されたレポートが見つかりませんでした。別の端末やブラウザで作成した可能性があります。</p>');
+      return;
+    }
+    Object.assign(IDEA, rec.idea || {});
+    document.querySelectorAll('[data-idea]').forEach(el => {
+      const v = (rec.idea || {})[el.dataset.idea];
+      el.textContent = v || '（未入力）';
+    });
+    // モードで出ないセクションは残したまま、保存分だけ流し込む
+    Object.entries(rec.sections || {}).forEach(([k, md]) => fillSection(k, md));
+    // 保存されていないセクション（別モードの枠）は取り除く
+    document.querySelectorAll('.section.pending').forEach(sec => sec.remove());
+
+    // 両モード分のDOMを描画しているため、並びと通し番号が保存時とずれる。
+    // 保存した順に並べ替え、番号を振り直す。
+    const NUMS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+    const order = Object.keys(rec.sections || {});
+    const anchor = document.querySelector('.section');
+    if (anchor) {
+      const parent = anchor.parentElement;
+      order.forEach(key => {
+        const body = document.querySelector('.section-body[data-section="' + key + '"]');
+        if (body) parent.appendChild(body.closest('.section'));
+      });
+    }
+    document.querySelectorAll('.section .section-title').forEach((t, i) => {
+      t.textContent = (NUMS[i] || '') + ' ' + t.textContent.trim().replace(/^[①-⑩]\s*/, '').replace(/\s+/g, ' ');
+    });
+    // 目次はモード別に描画されているため、残ったセクションから組み直す
+    const toc = document.querySelector('.toc-list');
+    if (toc) {
+      toc.innerHTML = '';
+      document.querySelectorAll('.section').forEach(sec => {
+        const title = sec.querySelector('.section-title');
+        if (!title) return;
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = '#' + sec.id;
+        a.textContent = title.textContent.trim();
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        li.appendChild(a);
+        toc.appendChild(li);
+      });
+    }
+    // バッジを保存時のモードに合わせる
+    const badge = document.querySelector('header .badge');
+    if (badge) {
+      const isStartup = rec.mode === 'startup';
+      badge.textContent = isStartup ? '🚀 スタートアップ評価モード' : '🔧 COOターンアラウンドモード';
+      badge.classList.toggle('badge-startup', isStartup);
+      badge.classList.toggle('badge-coo', !isStartup);
+    }
+    const when = document.createElement('div');
+    when.className = 'saved-note';
+    when.textContent = '保存日時: ' + new Date(rec.savedAt).toLocaleString('ja-JP');
+    document.querySelector('header').appendChild(when);
+  }
+
+  if (RESTORE) restoreReport();
+
+  // --- レポートへの追加質問 ---
+  const chatHistory = [];
+
+  function addTurn(who, text, asMarkdown) {
+    const d = document.createElement('div');
+    d.className = 'chat-turn ' + who;
+    const b = document.createElement('div');
+    b.className = 'b';
+    if (asMarkdown) b.innerHTML = marked.parse(text); else b.textContent = text;
+    d.appendChild(b);
+    document.getElementById('chat-log').appendChild(d);
+    d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return b;
+  }
+
+  document.getElementById('chat-send').addEventListener('click', async () => {
+    const ta = document.getElementById('chat-q');
+    const q = ta.value.trim();
+    const errEl = document.getElementById('chat-err');
+    if (!q) { errEl.textContent = '質問を入力してください'; return; }
+    errEl.textContent = '';
+    addTurn('me', q, false);
+    ta.value = '';
+    const btn = document.getElementById('chat-send');
+    btn.disabled = true;
+    const thinking = addTurn('ai', '考えています…', false);
+
+    try {
+      const body = new FormData();
+      body.append('report', buildMarkdown());
+      body.append('question', q);
+      body.append('history', JSON.stringify(chatHistory));
+      const res = await fetch('/chat', { method: 'POST', body });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      thinking.innerHTML = marked.parse(data.answer);
+      chatHistory.push({ role: 'user', content: q });
+      chatHistory.push({ role: 'assistant', content: data.answer });
+    } catch (e) {
+      thinking.textContent = '';
+      errEl.textContent = '回答を取得できませんでした: ' + (e.message || e);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('chat-q').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      document.getElementById('chat-send').click();
+    }
+  });
 
   function toggleSection(header) {
     header.parentElement.classList.toggle('collapsed');
