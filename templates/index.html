@@ -424,16 +424,14 @@
       input.addEventListener('change', () => {
         const whyMe = document.getElementById('why-me-section');
         whyMe.style.display = input.value === 'startup' ? 'block' : 'none';
+        // モードで自動入力の対象項目が変わるため、前回の表示を消す
+        document.querySelectorAll('.af-drafted').forEach(e => e.classList.remove('af-drafted'));
+        document.querySelectorAll('.af-note').forEach(e => e.remove());
+        document.getElementById('af-status').textContent = '';
       });
     });
 
     // AI自動入力
-    const AF_LABELS = {
-      problem: '解決する課題', solution: 'ソリューション', business_model: 'ビジネスモデル',
-      phase: 'フェーズ', full_commit_members: 'フルコミットメンバー',
-      committable_members: 'コミッタブルメンバー', q2_2_credentials: '保有資格・学位',
-      q2_4_ai_usage: 'AI活用状況'
-    };
     const AF_CONF = { high: '高', medium: '中', low: '低' };
 
     function afNote(el, info) {
@@ -494,9 +492,9 @@
             el.value = val;
             el.classList.add('af-drafted');
             afNote(el, info);
-            filled.push(AF_LABELS[key] || key);
+            filled.push((data.labels || {})[key] || key);
           } else {
-            notFound.push(AF_LABELS[key] || key);
+            notFound.push((data.labels || {})[key] || key);
           }
         }
 
@@ -506,8 +504,9 @@
           html += '<div class="af-muted">公開情報では確認できなかった項目: '
                 + escapeHtml(notFound.join('、')) + '</div>';
         }
-        html += '<div class="af-muted">このあとの背景情報（2-1／2-3／3-1／3-2）は'
-              + '公開情報に無いため、ご自身で記入してください。</div>';
+        if (data.manual_note) {
+          html += '<div class="af-muted">' + escapeHtml(data.manual_note) + '</div>';
+        }
         statusEl.innerHTML = html;
       } catch (e) {
         clearInterval(tick);

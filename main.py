@@ -329,23 +329,51 @@ async def evaluate_sections(mode: str, context: str):
 # 自動入力（URL から公開情報を調査してフォームを下書きする）
 # ============================================================
 # フォーム項目は両モードで共通なので、1つの実装で startup / coo の両方に使える。
-AUTOFILL_FIELDS = {
-    "problem":             "この事業／企業が解決しようとしている課題",
-    "solution":            "提供している製品・サービスの内容",
-    "business_model":      "収益モデル（課金方式・価格・主要顧客）",
-    "phase":               "現在のフェーズ（設立年・従業員数・拠点・直近の動き）",
+# 自動入力の対象項目。COOモードでは Why Me セクション（#why-me-section）が
+# 画面上で非表示になるため、見えない欄を埋めないよう対象を絞る。
+AUTOFILL_FIELDS_COMMON = {
+    "problem":        "この事業／企業が解決しようとしている課題",
+    "solution":       "提供している製品・サービスの内容",
+    "business_model": "収益モデル（課金方式・価格・主要顧客）",
+    "phase":          "現在のフェーズ（設立年・従業員数・拠点・直近の動き）",
+}
+
+# スタートアップモードでのみ表示される Why Me 関連の項目
+AUTOFILL_FIELDS_STARTUP = {
     "full_commit_members": "代表者および常勤役員の氏名と経歴",
-    "committable_members":  "非常勤・顧問・アドバイザー",
+    "committable_members": "非常勤・顧問・アドバイザー",
     "q2_2_credentials":    "代表者・役員が公開している学位・資格",
     "q2_4_ai_usage":       "AI・デジタルツールの活用状況",
 }
 
-# 公開情報から埋まらない項目。推測させず、必ず利用者に質問する。
+AUTOFILL_LABELS = {
+    "problem": "解決する課題", "solution": "ソリューション",
+    "business_model": "ビジネスモデル", "phase": "フェーズ",
+    "full_commit_members": "フルコミットメンバー", "committable_members": "コミッタブルメンバー",
+    "q2_2_credentials": "保有資格・学位", "q2_4_ai_usage": "AI活用状況",
+}
+
+
+def autofill_fields_for(mode: str) -> dict[str, str]:
+    fields = dict(AUTOFILL_FIELDS_COMMON)
+    if mode == "startup":
+        fields.update(AUTOFILL_FIELDS_STARTUP)
+    return fields
+
+
+# 公開情報から埋まらない項目。推測させず、必ず利用者に記入してもらう（スタートアップのみ）。
 AUTOFILL_ASK_USER = {
     "q2_1_continuity":  "最も長く独力で取り組み続けたこと（期間と、何度やめようと思ったか）",
     "q2_3_application": "資格・能力を実務でどう適用し、どんな成果が出たか",
     "q3_1_network":     "理由を聞かずに1万円を貸してくれるハブ人材の人数と、ネットワークの重複度",
     "q3_2_doors":       "1次ドア（資源・権限への直接経路）と2次ドア（コミュニティの橋渡し役）の人数",
+}
+
+AUTOFILL_MANUAL_NOTE = {
+    "startup": "背景情報（2-1／2-3／3-1／3-2）は公開情報に存在しないため、ご自身で記入してください。"
+               "Why Me 評価の3因子に使われます。",
+    "coo":     "COOターンアラウンドモードでは Why Me 評価を行わないため、"
+               "入力は上記4項目のみです。財務状況など非公開の情報は追記してください。",
 }
 
 AUTOFILL_INSTRUCTIONS = """あなたは企業調査の専門家です。指定URLとWeb検索から、公開情報のみを収集します。
@@ -360,7 +388,7 @@ AUTOFILL_INSTRUCTIONS = """あなたは企業調査の専門家です。指定UR
 - 日本語で記述すること"""
 
 
-def autofill_schema() -> dict:
+def autofill_schema(fields: dict[str, str]) -> dict:
     field = {
         "type": "object",
         "properties": {
@@ -370,12 +398,12 @@ def autofill_schema() -> dict:
         },
         "required": ["value", "confidence", "sources"],
     }
-    props = {k: dict(field) for k in AUTOFILL_FIELDS}
+    props = {k: dict(field) for k in fields}
     props["company_name"] = {"type": "string"}
     return {
         "type": "object",
         "properties": props,
-        "required": ["company_name", *AUTOFILL_FIELDS],
+        "required": ["company_name", *fields],
     }
 
 
@@ -385,6 +413,7 @@ async def autofill_from_url(url: str, mode: str) -> dict:
     if not api_key:
         raise ValueError("PERPLEXITY_API_KEY が設定されていません")
 
+    fields = autofill_fields_for(mode)
     focus = (
         "既存事業の立て直しを前提とした調査です。現在の事業内容・組織規模・"
         "オペレーション上の課題、直近の業績や資金繰りに関する公開情報を重視してください。"
@@ -392,7 +421,7 @@ async def autofill_from_url(url: str, mode: str) -> dict:
         "新規事業の評価を前提とした調査です。構想・提供価値・差別化要素・"
         "現在の開発フェーズに関する公開情報を重視してください。"
     )
-    asks = "\n".join(f"- {k}: {v}" for k, v in AUTOFILL_FIELDS.items())
+    asks = "\n".join(f"- {k}: {v}" for k, v in fields.items())
     payload = {
         "model": SEARCH_MODELS["competitors"],
         "instructions": AUTOFILL_INSTRUCTIONS,
@@ -408,7 +437,7 @@ async def autofill_from_url(url: str, mode: str) -> dict:
         ],
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"name": "autofill", "strict": True, "schema": autofill_schema()},
+            "json_schema": {"name": "autofill", "strict": True, "schema": autofill_schema(fields)},
         },
     }
 
@@ -443,11 +472,15 @@ async def autofill_from_url(url: str, mode: str) -> dict:
         (usage.get("cost") or {}).get("total_cost"),
     )
 
-    fields = json.loads(text)
+    result = json.loads(text)
+    is_startup = mode == "startup"
     return {
-        "company_name": fields.pop("company_name", ""),
-        "fields": fields,
-        "ask_user": AUTOFILL_ASK_USER,
+        "company_name": result.pop("company_name", ""),
+        # スキーマ外の項目が混ざっても画面に出さない
+        "fields": {k: v for k, v in result.items() if k in fields},
+        "labels": {k: AUTOFILL_LABELS.get(k, k) for k in fields},
+        "ask_user": AUTOFILL_ASK_USER if is_startup else {},
+        "manual_note": AUTOFILL_MANUAL_NOTE["startup" if is_startup else "coo"],
         "cost": (usage.get("cost") or {}).get("total_cost"),
     }
 
