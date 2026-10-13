@@ -453,6 +453,15 @@
       note.innerHTML = html;
     }
 
+    // <form> 内のテキスト入力で Enter を押すとフォームが送信される。
+    // URL欄では送信ではなく自動入力を実行する。
+    document.getElementById('af-url').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('af-btn').click();
+      }
+    });
+
     document.getElementById('af-btn').addEventListener('click', async () => {
       const btn = document.getElementById('af-btn');
       const statusEl = document.getElementById('af-status');
@@ -460,6 +469,7 @@
       if (!url) { statusEl.innerHTML = '<span class="af-err">URLを入力してください</span>'; return; }
 
       btn.disabled = true;
+      document.getElementById('submit-btn').disabled = true;
       const t0 = Date.now();
       const tick = setInterval(() => {
         statusEl.textContent = '調査中… ' + Math.round((Date.now() - t0) / 1000) + '秒（30〜60秒かかります）';
@@ -505,6 +515,7 @@
                            + escapeHtml(String(e.message || e)) + '</span>';
       } finally {
         btn.disabled = false;
+        document.getElementById('submit-btn').disabled = false;
       }
     });
 
