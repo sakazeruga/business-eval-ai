@@ -525,6 +525,7 @@ async def evaluate(
     q2_4_ai_usage: str = Form(default=""),
     q3_1_network: str = Form(default=""),
     q3_2_doors: str = Form(default=""),
+    extra_context: str = Form(default=""),
 ):
     business_idea = {
         "problem": problem,
@@ -547,6 +548,8 @@ async def evaluate(
     }
 
     context = build_context(business_idea, answers)
+    if extra_context.strip():
+        context += f"\n\n## 追加ヒアリング（AI対話で取得）\n{extra_context.strip()}"
 
     # 画面に出るカード数。競合調査カードは startup モードのみ表示される
     total = len(SECTION_ORDER["startup" if mode == "startup" else "coo"]) + 1
@@ -587,6 +590,101 @@ async def evaluate(
     )
 
 
+# ============================================================
+# 対話インテーク（URL → 調査 → 不足をAIが質問 → 充足判定 → 評価）
+# ============================================================
+INTAKE_MAX_QUESTIONS = 6
+
+# モードごとに「評価に最低限必要なもの」を定義する。
+# ここが満たされたかどうかを AI が判定し、進行可否を決める。
+INTAKE_REQUIREMENTS = {
+    "startup": """この評価では次が揃っている必要があります。
+1. 解決する課題 / ソリューション / 収益モデル / 現在のフェーズ
+2. Why Me 3因子:
+   - 情報収集能力: 競合に対する差別化を説明できるか
+   - 背景: 独力で長く継続した経験、保有資格と実務での適用、AI活用度
+   - 巻き込み力: 1次ドア（資源・権限への直接経路）と2次ドア（コミュニティの橋渡し）の人数と重複度
+Why Me の3因子は公開情報に存在しないため、必ず質問して取得すること。""",
+    "coo": """この評価では次が揃っている必要があります。
+1. 現在の事業内容 / 収益モデル / 組織規模
+2. ターンアラウンド診断に必要な実態:
+   - 直近の売上規模と推移、収支（赤字なら月次の赤字額）
+   - 資金繰りの状況（手元資金の持ち時間、借入・調達予定）
+   - オペレーション上の最大のボトルネック
+   - 社長が「何が壊れたか」をどう認識しているか
+財務情報は非公開のため、必ず質問して取得すること。""",
+}
+
+INTAKE_SYSTEM = """あなたは事業評価の入力を整えるインタビュアーです。
+調査結果とこれまでの回答を読み、評価を始められるだけの情報が揃ったかを判定します。
+
+判定の原則:
+- 公開情報で分かることは質問しない。調査結果に書いてあることを聞き返さない
+- 1回に1問だけ。答えやすい具体的な聞き方にすること
+- 評価の結論を左右しない細部は聞かない。足りなければ「不明」として進めてよい
+- 既に十分なら ready を true にして質問を打ち切ること
+
+必ず次のJSONだけを出力すること（前後に説明文を付けない）:
+{
+  "ready": true/false,
+  "question": "次に聞くこと（ready が true なら空文字）",
+  "why": "その質問が評価のどこに効くか（1文）",
+  "summary": {
+    "problem": "", "solution": "", "business_model": "", "phase": ""
+  }
+}
+summary は調査結果と回答から現時点で分かる内容を日本語で埋めること。"""
+
+
+def intake_user_prompt(mode: str, research: str, qa: list) -> str:
+    history = "\n".join(f"Q: {x.get('q','')}\nA: {x.get('a','')}" for x in qa) or "（まだ質問していません）"
+    return (
+        f"{INTAKE_REQUIREMENTS['startup' if mode == 'startup' else 'coo']}\n\n"
+        f"## 公開情報の調査結果\n{research}\n\n"
+        f"## これまでのやり取り\n{history}\n\n"
+        f"（これまでの質問数: {len(qa)} / 上限 {INTAKE_MAX_QUESTIONS}）"
+    )
+
+
+async def intake_assess(mode: str, research: str, qa: list) -> dict:
+    """不足を判定し、次の質問または充足判定を返す"""
+    client = get_client()
+
+    def _call() -> str:
+        kwargs = dict(
+            model=HAIKU,
+            max_tokens=2048,
+            messages=[
+                {"role": "system", "content": INTAKE_SYSTEM},
+                {"role": "user", "content": intake_user_prompt(mode, research, qa)},
+            ],
+            extra_body={"reasoning": {"enabled": False}},
+        )
+        if OPENROUTER_ZDR:
+            kwargs["extra_body"]["provider"] = {"zdr": True}
+        r = client.chat.completions.create(**kwargs)
+        return r.choices[0].message.content or ""
+
+    loop = asyncio.get_event_loop()
+    raw = (await loop.run_in_executor(None, _call)).strip()
+    # ```json ... ``` で囲まれて返ることがある
+    if raw.startswith("```"):
+        raw = raw.split("```")[1] if "```" in raw[3:] else raw.strip("`")
+        raw = raw[4:] if raw.lower().startswith("json") else raw
+    try:
+        data = json.loads(raw.strip())
+    except json.JSONDecodeError:
+        logger.warning("intake_assess: JSON parse failed: %.200s", raw)
+        # 判定できない場合は進行を止めず、利用者に自由記述を求める
+        return {"ready": False, "question": "他に評価にあたって伝えておきたいことはありますか？",
+                "why": "不足判定に失敗したため、補足を伺います", "summary": {}}
+
+    # 上限に達したら強制的に打ち切る（無限に質問が続かないようにする）
+    if len(qa) >= INTAKE_MAX_QUESTIONS:
+        data["ready"] = True
+    return data
+
+
 def normalize_url(raw: str) -> str:
     """入力されたURLを正規化する。スキーム省略時は https:// を補う。
 
@@ -608,6 +706,67 @@ def normalize_url(raw: str) -> str:
     if host in ("localhost",) or host.endswith(".local") or host.startswith(("127.", "10.", "192.168.", "169.254.")):
         raise ValueError("外部に公開されているURLを指定してください")
     return parsed.geturl()
+
+
+@app.get("/quick", response_class=HTMLResponse)
+async def quick(request: Request):
+    """URL から始める高速パス（調査 → AI対話 → 評価）"""
+    return templates.TemplateResponse(request, "quick.html")
+
+
+def research_to_text(result: dict) -> str:
+    """autofill の結果を、対話AIに渡す読み物テキストに変換する"""
+    lines = [f"対象: {result.get('company_name','')}"]
+    labels = result.get("labels", {})
+    for key, info in (result.get("fields") or {}).items():
+        val = (info.get("value") or "").strip()
+        if not val:
+            continue
+        lines.append(f"- {labels.get(key, key)}（確信度 {info.get('confidence')}）: {val}")
+    return "\n".join(lines)
+
+
+@app.post("/intake/start")
+async def intake_start(url: str = Form(...), mode: str = Form(default="coo")):
+    """URL を調査し、最初の質問を返す"""
+    try:
+        url = normalize_url(url)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    try:
+        research = await autofill_from_url(url, mode)
+        research_text = research_to_text(research)
+        assessment = await intake_assess(mode, research_text, [])
+    except Exception as e:
+        logger.exception("intake_start failed: %s", url)
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+    return JSONResponse({
+        "state": {"mode": mode, "url": url, "research": research_text, "qa": []},
+        "company_name": research.get("company_name", ""),
+        "research_summary": research_text,
+        **assessment,
+    })
+
+
+@app.post("/intake/reply")
+async def intake_reply(state: str = Form(...), question: str = Form(...), answer: str = Form(...)):
+    """回答を受け取り、次の質問または充足判定を返す"""
+    try:
+        st = json.loads(state)
+    except json.JSONDecodeError:
+        return JSONResponse(status_code=400, content={"error": "セッション情報が壊れています。最初からやり直してください。"})
+
+    qa = list(st.get("qa") or [])
+    qa.append({"q": question, "a": answer})
+    st["qa"] = qa
+    try:
+        assessment = await intake_assess(st.get("mode", "coo"), st.get("research", ""), qa)
+    except Exception as e:
+        logger.exception("intake_reply failed")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+    return JSONResponse({"state": st, **assessment})
 
 
 @app.post("/autofill")

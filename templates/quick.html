@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>クイック審査 | 事業評価AI</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --text: #e6e8ec; --muted: #9aa3b2;
+    --accent: #6366f1; --accent-hover: #4f46e5; --line: rgba(255,255,255,.1);
+    --ok: #2e9e5b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f8; --card: #fff; --text: #1a1d23; --muted: #666e7d;
+            --line: rgba(0,0,0,.1); }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    line-height: 1.75; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 60px; }
+  header { margin-bottom: 20px; }
+  h1 { font-size: 1.3rem; margin: 0 0 6px; }
+  .lead { color: var(--muted); font-size: .88rem; margin: 0; }
+  .back { color: var(--muted); font-size: .82rem; text-decoration: none; }
+  .back:hover { color: var(--text); }
+
+  .card { background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+
+  .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .mode-grid input { display: none; }
+  .mode-grid label { display: block; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; cursor: pointer; font-size: .86rem; }
+  .mode-grid input:checked + label { border-color: var(--accent); background: rgba(99,102,241,.12); }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  input[type=text], textarea { flex: 1 1 240px; background: transparent; color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    font-size: .95rem; font-family: inherit; }
+  textarea { width: 100%; min-height: 84px; resize: vertical; }
+  button { background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 20px; font-size: .92rem; cursor: pointer; font-family: inherit; }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+
+  .msg { margin-bottom: 14px; }
+  .msg-ai .bubble { background: rgba(99,102,241,.12); border: 1px solid rgba(99,102,241,.3); }
+  .msg-me { text-align: right; }
+  .msg-me .bubble { background: var(--card); border: 1px solid var(--line); }
+  .bubble { display: inline-block; text-align: left; max-width: 92%;
+    border-radius: 10px; padding: 10px 14px; font-size: .92rem; white-space: pre-wrap; }
+  .why { color: var(--muted); font-size: .76rem; margin-top: 5px; }
+  .sysnote { color: var(--muted); font-size: .8rem; margin-bottom: 14px; }
+  .err { color: #e05252; font-size: .86rem; }
+
+  .progress { color: var(--muted); font-size: .78rem; margin-bottom: 10px; }
+  .research { font-size: .82rem; color: var(--muted); white-space: pre-wrap;
+    border-left: 3px solid var(--ok); padding-left: 10px; margin-top: 8px; }
+  details summary { cursor: pointer; font-size: .84rem; color: var(--muted); }
+  .hidden { display: none; }
+  .spin { display: inline-block; width: 14px; height: 14px; vertical-align: -2px;
+    border: 2px solid var(--line); border-top-color: var(--text);
+    border-radius: 50%; animation: s .9s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>⚡ クイック審査</h1>
+    <p class="lead">URLを入れると公開情報を調査し、足りない点だけAIが質問します。揃った時点で評価に進みます。</p>
+    <a class="back" href="/">← 詳細フォームで入力する</a>
+  </header>
+
+  <!-- STEP 1: URL -->
+  <div class="card" id="step-url">
+    <div class="mode-grid">
+      <div>
+        <input type="radio" name="mode" id="m-coo" value="coo" checked>
+        <label for="m-coo">🔧 COOターンアラウンド</label>
+      </div>
+      <div>
+        <input type="radio" name="mode" id="m-startup" value="startup">
+        <label for="m-startup">🚀 スタートアップ評価</label>
+      </div>
+    </div>
+    <div class="row">
+      <input type="text" inputmode="url" id="url" placeholder="example.co.jp（https:// は省略可）">
+      <button id="start-btn">調査を開始</button>
+    </div>
+    <div class="sysnote" id="url-status" style="margin-top:10px"></div>
+  </div>
+
+  <!-- STEP 2: 対話 -->
+  <div class="card hidden" id="step-chat">
+    <div class="progress" id="progress"></div>
+    <details id="research-box" class="hidden" style="margin-bottom:14px">
+      <summary>調査で分かったこと</summary>
+      <div class="research" id="research"></div>
+    </details>
+    <div id="log"></div>
+    <div id="input-area">
+      <textarea id="answer" placeholder="回答を入力（分からなければ「不明」でも構いません）"></textarea>
+      <div class="row" style="margin-top:10px; justify-content: flex-end">
+        <button id="send-btn">回答する</button>
+      </div>
+    </div>
+    <div class="err" id="chat-err"></div>
+  </div>
+</div>
+
+<!-- 評価へ引き渡すフォーム -->
+<form method="POST" action="/evaluate" id="eval-form" class="hidden">
+  <input type="hidden" name="mode" id="f-mode">
+  <input type="hidden" name="problem" id="f-problem">
+  <input type="hidden" name="solution" id="f-solution">
+  <input type="hidden" name="business_model" id="f-business_model">
+  <input type="hidden" name="phase" id="f-phase">
+  <input type="hidden" name="extra_context" id="f-extra">
+</form>
+
+<script>
+  let STATE = null, CURRENT_Q = '', SUMMARY = {};
+
+  const $ = id => document.getElementById(id);
+
+  function addMsg(who, text, why) {
+    const d = document.createElement('div');
+    d.className = 'msg msg-' + who;
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    b.textContent = text;
+    d.appendChild(b);
+    if (why) {
+      const w = document.createElement('div');
+      w.className = 'why';
+      w.textContent = '→ ' + why;
+      d.appendChild(w);
+    }
+    $('log').appendChild(d);
+    d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function setBusy(btn, busy, label) {
+    btn.disabled = busy;
+    btn.innerHTML = busy ? '<span class="spin"></span> ' + label : label;
+  }
+
+  function updateProgress() {
+    const n = (STATE && STATE.qa) ? STATE.qa.length : 0;
+    $('progress').textContent = '質問 ' + n + ' 件に回答済み';
+  }
+
+  // --- STEP 1 ---
+  $('url').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('start-btn').click(); }
+  });
+
+  $('start-btn').addEventListener('click', async () => {
+    const url = $('url').value.trim();
+    if (!url) { $('url-status').innerHTML = '<span class="err">URLを入力してください</span>'; return; }
+    setBusy($('start-btn'), true, '調査中');
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      $('url-status').textContent = '公開情報を調査しています… ' + Math.round((Date.now() - t0) / 1000) + '秒';
+    }, 1000);
+    $('url-status').textContent = '公開情報を調査しています…';
+
+    try {
+      const body = new FormData();
+      body.append('url', url);
+      body.append('mode', document.querySelector('input[name=mode]:checked').value);
+      const res = await fetch('/intake/start', { method: 'POST', body });
+      const data = await res.json();
+      clearInterval(tick);
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+
+      STATE = data.state;
+      SUMMARY = data.summary || {};
+      $('url-status').textContent = '調査完了' + (data.company_name ? '：' + data.company_name.slice(0, 80) : '');
+      $('research').textContent = data.research_summary || '';
+      $('research-box').classList.remove('hidden');
+      $('step-chat').classList.remove('hidden');
+      updateProgress();
+      handleAssessment(data);
+    } catch (e) {
+      clearInterval(tick);
+      $('url-status').innerHTML = '<span class="err">調査に失敗しました: ' + esc(e.message || e) + '</span>';
+    } finally {
+      setBusy($('start-btn'), false, '調査を開始');
+    }
+  });
+
+  // --- STEP 2 ---
+  $('send-btn').addEventListener('click', async () => {
+    const answer = $('answer').value.trim();
+    if (!answer) { $('chat-err').textContent = '回答を入力してください'; return; }
+    $('chat-err').textContent = '';
+    addMsg('me', answer);
+    $('answer').value = '';
+    setBusy($('send-btn'), true, '送信中');
+
+    try {
+      const body = new FormData();
+      body.append('state', JSON.stringify(STATE));
+      body.append('question', CURRENT_Q);
+      body.append('answer', answer);
+      const res = await fetch('/intake/reply', { method: 'POST', body });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      STATE = data.state;
+      SUMMARY = data.summary || SUMMARY;
+      updateProgress();
+      handleAssessment(data);
+    } catch (e) {
+      $('chat-err').textContent = '送信に失敗しました: ' + (e.message || e);
+    } finally {
+      setBusy($('send-btn'), false, '回答する');
+    }
+  });
+
+  function handleAssessment(data) {
+    if (data.ready) {
+      addMsg('ai', '評価に必要な情報が揃いました。レポートの生成を開始します（1〜2分かかります）。');
+      $('input-area').classList.add('hidden');
+      setTimeout(submitEvaluation, 600);
+      return;
+    }
+    CURRENT_Q = data.question || '他に補足したいことはありますか？';
+    addMsg('ai', CURRENT_Q, data.why);
+    $('answer').focus();
+  }
+
+  function submitEvaluation() {
+    const qa = (STATE.qa || []).map(x => 'Q: ' + x.q + '\nA: ' + x.a).join('\n\n');
+    $('f-mode').value = STATE.mode;
+    $('f-problem').value = SUMMARY.problem || '';
+    $('f-solution').value = SUMMARY.solution || '';
+    $('f-business_model').value = SUMMARY.business_model || '';
+    $('f-phase').value = SUMMARY.phase || '';
+    $('f-extra').value = '### 公開情報の調査結果\n' + (STATE.research || '') +
+                         '\n\n### ヒアリング\n' + qa;
+    $('eval-form').submit();
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+</script>
+</body>
+</html>
