@@ -127,6 +127,34 @@
       .position-grid { grid-template-columns: 1fr 1fr; }
     }
 
+    /* クイック審査への主導線 */
+    .quick-cta {
+      display: flex; align-items: center; gap: 16px;
+      background: linear-gradient(135deg, rgba(99,102,241,.22), rgba(99,102,241,.08));
+      border: 1px solid rgba(99,102,241,.55);
+      border-radius: 14px; padding: 20px 22px; margin-bottom: 18px;
+      text-decoration: none; color: inherit;
+      transition: border-color .15s, transform .1s;
+    }
+    .quick-cta:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .quick-cta-main { flex: 1; }
+    .quick-cta-title { font-size: 1.35rem; font-weight: 700; line-height: 1.4; margin-bottom: 7px; }
+    .quick-cta-bolt { color: var(--accent); }
+    .quick-cta-desc { font-size: .88rem; line-height: 1.7; opacity: .8; }
+    .quick-cta-arrow { font-size: 1.5rem; color: var(--accent); flex: 0 0 auto; }
+    .quick-or {
+      display: flex; align-items: center; gap: 14px;
+      margin: 0 0 18px; font-size: .82rem; opacity: .55;
+    }
+    .quick-or::before, .quick-or::after {
+      content: ""; flex: 1; height: 1px; background: currentColor; opacity: .3;
+    }
+    @media (max-width: 480px) {
+      .quick-cta { padding: 17px 18px; }
+      .quick-cta-title { font-size: 1.15rem; }
+      .quick-cta-arrow { display: none; }
+    }
+
     /* AI自動入力 */
     .af-optional { font-size: .7rem; font-weight: 400; opacity: .6; border: 1px solid currentColor;
       border-radius: 4px; padding: 1px 6px; vertical-align: middle; margin-left: 6px; }
@@ -207,6 +235,20 @@
       <p>事業構想を入力すると、多角的フレームワークで構造的に評価します</p>
     </header>
 
+    <!-- 主導線: URLから始めるクイック審査（モード共通） -->
+    <a href="/quick" class="quick-cta">
+      <div class="quick-cta-main">
+        <div class="quick-cta-title"><span class="quick-cta-bolt">⚡</span> クイック審査ではじめる</div>
+        <div class="quick-cta-desc">
+          URLを入れるか、QRを読み取るだけ。公開情報をAIが調査し、
+          足りない点だけ質問して、揃った時点で評価まで進みます。
+        </div>
+      </div>
+      <div class="quick-cta-arrow">→</div>
+    </a>
+
+    <div class="quick-or"><span>または、下のフォームに自分で入力する</span></div>
+
     <form method="POST" action="/evaluate" id="eval-form">
 
       <!-- モード選択 -->
@@ -233,10 +275,6 @@
       <!-- AI自動入力 -->
       <div class="card">
         <h2>AI自動入力 <span class="af-optional">任意</span></h2>
-        <p class="af-lead" style="margin-bottom:10px">
-          URLだけで始めたい場合は <a href="/quick">⚡ クイック審査</a> をどうぞ。
-          不足点をAIが質問して、揃った時点で評価まで進みます。
-        </p>
         <p class="af-lead">
           企業・サービスのWebページURLを入れると、公開情報を調査して下の項目を下書きします。
           内容は必ず確認・修正してください。公開情報から判断できない項目は空のまま残ります。
