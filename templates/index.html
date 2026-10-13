@@ -136,18 +136,14 @@
     .af-btn { flex: 0 0 auto; padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer;
       background: var(--accent, #4f46e5); color: #fff; font-size: .9rem; }
     .af-btn:disabled { opacity: .55; cursor: default; }
-    .af-status { font-size: .84rem; margin-top: 12px; line-height: 1.8; }
+    .af-status { font-size: .86rem; margin-top: 12px; line-height: 1.8; }
     .af-status .af-err { color: #e05252; }
-    .af-badge { display: inline-block; font-size: .68rem; border-radius: 4px; padding: 1px 6px;
-      margin-left: 8px; vertical-align: middle; border: 1px solid currentColor; opacity: .85; }
-    .af-badge.high   { color: #2e9e5b; }
-    .af-badge.medium { color: #c28b1b; }
-    .af-badge.low    { color: #d9742b; }
-    .af-badge.unknown{ color: #999; }
-    .af-filled { outline: 2px solid rgba(46,158,91,.35); outline-offset: 1px; }
-    .af-needs-input { outline: 2px solid rgba(217,116,43,.5); outline-offset: 1px; }
-    .af-src { font-size: .75rem; opacity: .6; }
-    .af-src a { color: inherit; }
+    .af-status ul { margin: 6px 0 0; padding-left: 1.2em; }
+    .af-muted { opacity: .65; font-size: .8rem; }
+    /* AIが下書きした欄だけを控えめに示す */
+    .af-drafted { border-left: 3px solid #2e9e5b !important; }
+    .af-note { font-size: .76rem; opacity: .7; margin-top: 5px; }
+    .af-note a { color: inherit; }
 
     /* 送信ボタン */
     .submit-btn {
@@ -438,6 +434,24 @@
       committable_members: 'コミッタブルメンバー', q2_2_credentials: '保有資格・学位',
       q2_4_ai_usage: 'AI活用状況'
     };
+    const AF_CONF = { high: '高', medium: '中', low: '低' };
+
+    function afNote(el, info) {
+      const field = el.closest('.field') || el.parentElement;
+      let note = field.querySelector('.af-note');
+      if (!note) {
+        note = document.createElement('div');
+        note.className = 'af-note';
+        el.insertAdjacentElement('afterend', note);
+      }
+      const srcs = (info.sources || []).slice(0, 3);
+      let html = 'AIが下書き（確信度: ' + (AF_CONF[info.confidence] || info.confidence) + '）';
+      if (srcs.length) {
+        html += ' · 出典 ' + srcs.map((u, i) =>
+          '<a href="' + encodeURI(u) + '" target="_blank" rel="noopener">' + (i + 1) + '</a>').join(' ');
+      }
+      note.innerHTML = html;
+    }
 
     document.getElementById('af-btn').addEventListener('click', async () => {
       const btn = document.getElementById('af-btn');
@@ -455,46 +469,40 @@
       try {
         const body = new FormData();
         body.append('url', url);
-        body.append('mode', document.querySelector('input[name=\"mode\"]:checked').value);
+        body.append('mode', document.querySelector('input[name="mode"]:checked').value);
         const res = await fetch('/autofill', { method: 'POST', body });
         const data = await res.json();
         clearInterval(tick);
         if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
 
-        let filled = 0, needs = [];
+        const filled = [], notFound = [];
         for (const [key, info] of Object.entries(data.fields || {})) {
           const el = document.getElementById(key);
           if (!el) continue;
           const val = (info.value || '').trim();
           if (val && info.confidence !== 'unknown') {
             el.value = val;
-            el.classList.add('af-filled');
-            filled++;
+            el.classList.add('af-drafted');
+            afNote(el, info);
+            filled.push(AF_LABELS[key] || key);
           } else {
-            el.classList.add('af-needs-input');
-            needs.push(AF_LABELS[key] || key);
-          }
-        }
-        // 公開情報から取得できない項目は常に利用者に入力してもらう
-        for (const key of Object.keys(data.ask_user || {})) {
-          const el = document.getElementById(key);
-          if (el && !el.value.trim()) {
-            el.classList.add('af-needs-input');
-            needs.push(AF_LABELS[key] || document.querySelector('label[for=\"' + key + '\"]')?.textContent.trim() || key);
+            notFound.push(AF_LABELS[key] || key);
           }
         }
 
-        let html = '<strong>' + filled + '項目を下書きしました。</strong>';
-        if (data.company_name) html += '<div class=\"af-src\">調査対象: ' + escapeHtml(data.company_name.slice(0, 120)) + '</div>';
-        if (needs.length) html += '<div>要入力（オレンジ枠）: ' + escapeHtml(needs.join('、')) + '</div>';
-        html += '<div class=\"af-src\">内容と出典は必ず確認してください。</div>';
+        let html = '<strong>' + filled.length + '項目を下書きしました。</strong>'
+                 + '内容と出典を確認し、必要なら修正してください。';
+        if (notFound.length) {
+          html += '<div class="af-muted">公開情報では確認できなかった項目: '
+                + escapeHtml(notFound.join('、')) + '</div>';
+        }
+        html += '<div class="af-muted">このあとの背景情報（2-1／2-3／3-1／3-2）は'
+              + '公開情報に無いため、ご自身で記入してください。</div>';
         statusEl.innerHTML = html;
-
-        const first = document.querySelector('.af-needs-input');
-        if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } catch (e) {
         clearInterval(tick);
-        statusEl.innerHTML = '<span class=\"af-err\">自動入力に失敗しました: ' + escapeHtml(String(e.message || e)) + '</span>';
+        statusEl.innerHTML = '<span class="af-err">自動入力に失敗しました: '
+                           + escapeHtml(String(e.message || e)) + '</span>';
       } finally {
         btn.disabled = false;
       }
