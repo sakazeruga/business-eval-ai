@@ -256,17 +256,17 @@
         <h2>評価モードを選択</h2>
         <div class="mode-grid">
           <div>
-            <input type="radio" name="mode" id="mode-startup" value="startup" class="mode-option" checked>
-            <label for="mode-startup" class="mode-label">
-              <span class="mode-title">🚀 スタートアップ評価</span>
-              <span class="mode-desc">Why me / Why now から NPV/EXIT まで、事業構想を全方位評価</span>
-            </label>
-          </div>
-          <div>
-            <input type="radio" name="mode" id="mode-coo" value="coo" class="mode-option">
+            <input type="radio" name="mode" id="mode-coo" value="coo" class="mode-option" checked>
             <label for="mode-coo" class="mode-label">
               <span class="mode-title">🔧 COOターンアラウンド</span>
               <span class="mode-desc">既存事業の財務診断から穴塞ぎ・アクセラレーターまで優先打ち手を特定</span>
+            </label>
+          </div>
+          <div>
+            <input type="radio" name="mode" id="mode-startup" value="startup" class="mode-option">
+            <label for="mode-startup" class="mode-label">
+              <span class="mode-title">🚀 スタートアップ評価</span>
+              <span class="mode-desc">Why me / Why now から NPV/EXIT まで、事業構想を全方位評価</span>
             </label>
           </div>
         </div>
@@ -462,11 +462,20 @@
   <script>
     // モード切替でWhy Meセクションを表示/非表示
     const modeInputs = document.querySelectorAll('input[name="mode"]');
+
+    function syncWhyMe() {
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+      document.getElementById('why-me-section').style.display =
+        mode === 'startup' ? 'block' : 'none';
+    }
+    // 既定がCOOのため、読み込み時にも反映させる（changeイベントだけでは初期状態がずれる）
+    syncWhyMe();
+
     modeInputs.forEach(input => {
       input.addEventListener('change', () => {
-        const whyMe = document.getElementById('why-me-section');
-        whyMe.style.display = input.value === 'startup' ? 'block' : 'none';
+        syncWhyMe();
         // モードで自動入力の対象項目が変わるため、前回の表示を消す
+        // （以下は切替時のみ実行）
         document.querySelectorAll('.af-drafted').forEach(e => e.classList.remove('af-drafted'));
         document.querySelectorAll('.af-note').forEach(e => e.remove());
         document.getElementById('af-status').textContent = '';
