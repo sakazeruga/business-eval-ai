@@ -127,6 +127,8 @@
       .position-grid { grid-template-columns: 1fr 1fr; }
     }
 
+    .usage-note { text-align: right; font-size: .78rem; opacity: .65; min-height: 1.2em; margin: -4px 4px 10px; }
+
     /* クイック審査への主導線 */
     .quick-cta {
       display: flex; align-items: center; gap: 16px;
@@ -248,6 +250,8 @@
       <h1>事業評価AIサービス</h1>
       <p>事業構想を入力すると、多角的フレームワークで構造的に評価します</p>
     </header>
+
+    <div class="usage-note" id="usage-note"></div>
 
     <!-- 主導線: URLから始めるクイック審査（モード共通） -->
     <a href="/quick" class="quick-cta">
@@ -481,6 +485,16 @@
   </div>
 
   <script>
+
+  // 本日の残り回数を表示する（上限に突然ぶつからないようにする）
+  fetch('/usage').then(r => r.json()).then(d => {
+    const e = d.usage && d.usage.evaluate;
+    const el = document.getElementById('usage-note');
+    if (!e || !el || e.limit === null) return;
+    const left = Math.max(0, e.limit - e.used);
+    el.textContent = '本日の評価レポート: あと ' + left + ' 回（1日 ' + e.limit + ' 回まで）';
+  }).catch(() => {});
+
     // 保存したレポート一覧（localStorage）
     const STORE_KEY = 'bizeval.reports';
 

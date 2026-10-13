@@ -27,6 +27,7 @@
   .back { display: inline-block; color: var(--muted); font-size: .85rem;
           text-decoration: none; border-bottom: 1px solid var(--line); padding-bottom: 1px; }
   .back:hover { color: var(--text); border-color: var(--accent); }
+  .usage-note { font-size: .78rem; color: var(--muted); margin-top: 10px; min-height: 1.2em; }
   @media (max-width: 480px) { h1 { font-size: 1.6rem; } }
 
   .card { background: var(--card); border: 1px solid var(--line);
@@ -84,6 +85,7 @@
     <h1><span class="bolt">⚡</span> クイック審査</h1>
     <p class="lead">URLを入れると公開情報を調査し、足りない点だけAIが質問します。揃った時点で評価に進みます。</p>
     <a class="back" href="/">← 詳細フォームで入力する</a>
+    <div class="usage-note" id="usage-note"></div>
   </header>
 
   <!-- STEP 1: URL -->
@@ -172,6 +174,16 @@
     const n = (STATE && STATE.qa) ? STATE.qa.length : 0;
     $('progress').textContent = '質問 ' + n + ' 件に回答済み';
   }
+
+
+  // 本日の残り回数を表示する（上限に突然ぶつからないようにする）
+  fetch('/usage').then(r => r.json()).then(d => {
+    const e = d.usage && d.usage.evaluate;
+    const el = document.getElementById('usage-note');
+    if (!e || !el || e.limit === null) return;
+    const left = Math.max(0, e.limit - e.used);
+    el.textContent = '本日の評価レポート: あと ' + left + ' 回（1日 ' + e.limit + ' 回まで）';
+  }).catch(() => {});
 
   // --- STEP 1 ---
   $('url').addEventListener('keydown', e => {

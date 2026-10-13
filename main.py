@@ -4,9 +4,11 @@ OpenRouter 経由でモデルを呼び出す（Phase 2 でモデル切替が容�
 """
 
 import asyncio
+import html
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import httpx
@@ -52,6 +54,115 @@ class CloudflareAccessMiddleware(BaseHTTPMiddleware):
 
 if REQUIRE_CF_ACCESS:
     app.add_middleware(CloudflareAccessMiddleware)
+
+# ============================================================
+# 利用上限（コスト保護）
+# ============================================================
+# URL を共有した相手が使いすぎても、費用が膨らまないようにする。
+# 利用者は Cloudflare Access が付与するメールアドレスで識別する。
+#
+# 注意: 集計はプロセス内メモリで持つ。Fly のマシンは2台構成で、停止・再起動・
+# デプロイで消えるため、実効上限は設定値の最大2倍程度になり得る。
+# 厳密にするなら共有ストアが必要。最終的な歯止めは OpenRouter / Perplexity の
+# 前払い残高（使い切れば止まる）。
+JST = timezone(timedelta(hours=9))
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+# 1ユーザー・1日あたり（JST 0時でリセット）
+USER_LIMITS = {
+    "evaluate": _env_int("LIMIT_EVALUATE_PER_USER", 5),    # 評価レポート（約11円/回）
+    "research": _env_int("LIMIT_RESEARCH_PER_USER", 10),   # URL調査・自動入力（約1円/回）
+    "chat":     _env_int("LIMIT_CHAT_PER_USER", 40),       # 追加質問・ヒアリング返信（1円未満/回）
+}
+# サービス全体・1日あたり。利用者が増えても総額に天井を設ける
+GLOBAL_LIMITS = {
+    "evaluate": _env_int("LIMIT_EVALUATE_GLOBAL", 60),
+    "research": _env_int("LIMIT_RESEARCH_GLOBAL", 150),
+    "chat":     _env_int("LIMIT_CHAT_GLOBAL", 600),
+}
+KIND_LABEL = {"evaluate": "評価レポートの作成", "research": "URLの調査", "chat": "AIへの質問"}
+ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+MAX_CONCURRENT_EVALS = _env_int("MAX_CONCURRENT_EVALS", 4)
+EVAL_SLOTS = asyncio.Semaphore(MAX_CONCURRENT_EVALS)
+
+# 入力サイズの上限（巨大な入力でトークン費用を膨らませる使い方を防ぐ）
+MAX_EVAL_CHARS = 60000
+MAX_REPORT_CHARS = 120000
+MAX_QUESTION_CHARS = 3000
+
+_usage: dict[str, int] = {}
+
+
+def current_user(request: Request) -> str:
+    return (request.headers.get("cf-access-authenticated-user-email") or "local").strip().lower()
+
+
+def _today() -> str:
+    return datetime.now(JST).strftime("%Y-%m-%d")
+
+
+def usage_snapshot(request: Request) -> dict:
+    """現在の利用者の、本日の使用回数と上限を返す"""
+    user, day = current_user(request), _today()
+    unlimited = user in ADMIN_EMAILS
+    return {
+        kind: {
+            "used": _usage.get(f"{day}|{kind}|{user}", 0),
+            "limit": None if unlimited else USER_LIMITS[kind],
+        }
+        for kind in USER_LIMITS
+    }
+
+
+def charge(request: Request, kind: str) -> str | None:
+    """上限内なら1回分を加算して None を返す。超過なら利用者向けの理由文を返す。"""
+    user, day = current_user(request), _today()
+    for stale in [k for k in _usage if not k.startswith(day)]:
+        del _usage[stale]
+    if user in ADMIN_EMAILS:
+        return None
+
+    ukey, gkey = f"{day}|{kind}|{user}", f"{day}|{kind}|*"
+    if _usage.get(gkey, 0) >= GLOBAL_LIMITS[kind]:
+        logger.warning("global limit reached kind=%s", kind)
+        return f"本日は{KIND_LABEL[kind]}の全体上限に達しました。明日またお試しください。"
+    if _usage.get(ukey, 0) >= USER_LIMITS[kind]:
+        return (f"本日の{KIND_LABEL[kind]}は上限（{USER_LIMITS[kind]}回）に達しました。"
+                "明日（日本時間 0時）にリセットされます。")
+    _usage[ukey] = _usage.get(ukey, 0) + 1
+    _usage[gkey] = _usage.get(gkey, 0) + 1
+    return None
+
+
+def limit_json(message: str, status: int = 429) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": message})
+
+
+LIMIT_PAGE = """<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>ご利用制限 | 事業評価AI</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--text:#e6e8ec;--muted:#9aa3b2;--line:rgba(255,255,255,.12);--accent:#6366f1}
+@media (prefers-color-scheme:light){:root{--bg:#f5f6f8;--card:#fff;--text:#1a1d23;--muted:#666e7d;--line:rgba(0,0,0,.12)}}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+background:var(--bg);color:var(--text);font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;line-height:1.8}
+.box{max-width:480px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}
+h1{font-size:1.25rem;margin:0 0 12px}p{margin:0 0 18px;color:var(--muted)}
+a{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;border-radius:8px;padding:10px 20px}
+</style></head><body><div class="box"><h1>ご利用を一時的に制限しています</h1>
+<p>__MSG__</p><a href="/">トップへ戻る</a></div></body></html>"""
+
+
+def limit_page(message: str, status: int = 429) -> HTMLResponse:
+    return HTMLResponse(LIMIT_PAGE.replace("__MSG__", html.escape(message)), status_code=status)
+
 
 # ============================================================
 # モデル設定
@@ -531,6 +642,18 @@ async def evaluate(
     q3_2_doors: str = Form(default=""),
     extra_context: str = Form(default=""),
 ):
+    inputs = (problem, solution, business_model, phase, position, full_commit_members,
+              committable_members, q2_1_continuity, q2_2_credentials, q2_3_application,
+              q2_4_ai_usage, q3_1_network, q3_2_doors, extra_context)
+    if sum(len(x) for x in inputs) > MAX_EVAL_CHARS:
+        return limit_page(f"入力が長すぎます（合計{MAX_EVAL_CHARS:,}文字まで）。内容を絞ってお試しください。", 413)
+    if EVAL_SLOTS.locked():
+        return limit_page("ただいま評価の依頼が集中しています。1〜2分ほど待ってからお試しください。")
+    # 先に混雑・サイズを判定し、通った場合だけ回数を消費する
+    over = charge(request, "evaluate")
+    if over:
+        return limit_page(over)
+
     business_idea = {
         "problem": problem,
         "solution": solution,
@@ -561,6 +684,11 @@ async def evaluate(
         total += 1
 
     async def generate():
+        async with EVAL_SLOTS:
+            async for chunk in generate_inner():
+                yield chunk
+
+    async def generate_inner():
         page = templates.get_template("result.html").render(
             request=request,
             mode=mode,
@@ -731,12 +859,15 @@ def research_to_text(result: dict) -> str:
 
 
 @app.post("/intake/start")
-async def intake_start(url: str = Form(...), mode: str = Form(default="coo")):
+async def intake_start(request: Request, url: str = Form(...), mode: str = Form(default="coo")):
     """URL を調査し、最初の質問を返す"""
     try:
         url = normalize_url(url)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
+    over = charge(request, "research")
+    if over:
+        return limit_json(over)
     try:
         research = await autofill_from_url(url, mode)
         research_text = research_to_text(research)
@@ -754,8 +885,13 @@ async def intake_start(url: str = Form(...), mode: str = Form(default="coo")):
 
 
 @app.post("/intake/reply")
-async def intake_reply(state: str = Form(...), question: str = Form(...), answer: str = Form(...)):
+async def intake_reply(request: Request, state: str = Form(...), question: str = Form(...), answer: str = Form(...)):
     """回答を受け取り、次の質問または充足判定を返す"""
+    if len(state) + len(question) + len(answer) > MAX_EVAL_CHARS:
+        return limit_json("入力が長すぎます。内容を絞ってください。", 413)
+    over = charge(request, "chat")
+    if over:
+        return limit_json(over)
     try:
         st = json.loads(state)
     except json.JSONDecodeError:
@@ -789,11 +925,19 @@ REPORT_CHAT_MAX_HISTORY = 12
 
 @app.post("/chat")
 async def report_chat(
+    request: Request,
     report: str = Form(...),
     question: str = Form(...),
     history: str = Form(default="[]"),
 ):
     """評価レポートについての追加質問に答える"""
+    if len(report) > MAX_REPORT_CHARS or len(history) > MAX_REPORT_CHARS:
+        return limit_json("レポートが大きすぎるため質問できません。", 413)
+    if len(question) > MAX_QUESTION_CHARS:
+        return limit_json(f"質問が長すぎます（{MAX_QUESTION_CHARS:,}文字まで）。", 413)
+    over = charge(request, "chat")
+    if over:
+        return limit_json(over)
     try:
         past = json.loads(history)[-REPORT_CHAT_MAX_HISTORY:]
     except json.JSONDecodeError:
@@ -847,17 +991,26 @@ async def saved_report(request: Request):
 
 
 @app.post("/autofill")
-async def autofill(url: str = Form(...), mode: str = Form(default="coo")):
+async def autofill(request: Request, url: str = Form(...), mode: str = Form(default="coo")):
     """URL から公開情報を調査し、フォームの下書きを JSON で返す"""
     try:
         url = normalize_url(url)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
+    over = charge(request, "research")
+    if over:
+        return limit_json(over)
     try:
         return JSONResponse(await autofill_from_url(url, mode))
     except Exception as e:
         logger.exception("autofill failed: %s", url)
         return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@app.get("/usage")
+async def usage(request: Request):
+    """現在の利用者の、本日の使用回数と上限"""
+    return {"user": current_user(request), "usage": usage_snapshot(request)}
 
 
 @app.get("/health")
