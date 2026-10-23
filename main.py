@@ -38,6 +38,10 @@ from prompts import (
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger("business_eval")
+
 app = FastAPI(title="事業評価AIサービス")
 templates = Jinja2Templates(directory="templates")
 
@@ -328,9 +332,6 @@ SEARCH_INSTRUCTIONS_SUFFIX = (
     "市場規模・成長率などの数値には出典と年を併記すること。"
 )
 
-logging.basicConfig(level=logging.INFO)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logger = logging.getLogger("business_eval")
 
 
 def get_client() -> OpenAI:
