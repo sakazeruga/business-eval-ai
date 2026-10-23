@@ -14,11 +14,13 @@ from urllib.parse import urlparse
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from openai import OpenAI
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import access
+import store
 from prompts import (
     SYSTEM_BASE,
     build_context,
@@ -52,8 +54,47 @@ class CloudflareAccessMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
         return await call_next(request)
 
+# 承認なしでも通すパス。申請・招待・ヘルスチェックは承認前に触れる必要がある。
+ACCESS_OPEN_PATHS = ("/health", "/request", "/no-access")
+ACCESS_OPEN_PREFIXES = ("/invite/",)
+
+
+class ApprovalMiddleware(BaseHTTPMiddleware):
+    """Cloudflare Access は「本人か」を確認するだけなので、
+    「使ってよいか」はアプリ側の承認リストで判定する。"""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path in ACCESS_OPEN_PATHS or path.startswith(ACCESS_OPEN_PREFIXES):
+            return await call_next(request)
+
+        email = current_user(request)
+        try:
+            allowed = await access.is_approved(email)
+        except store.StoreError as e:
+            # 承認状況を確認できないときは通さない（誤って開放しない）
+            logger.warning("approval check failed email=%s: %s", email, e)
+            if request.method == "GET":
+                return HTMLResponse(
+                    render_notice("ただいま確認できません",
+                                  "利用状況を確認できませんでした。少し時間をおいてお試しください。"),
+                    status_code=503)
+            return JSONResponse(status_code=503, content={"error": "一時的に確認できません。"})
+
+        if allowed:
+            return await call_next(request)
+
+        if request.method == "GET":
+            return RedirectResponse("/no-access", status_code=303)
+        return JSONResponse(status_code=403, content={"error": "利用が許可されていません。"})
+
+
 if REQUIRE_CF_ACCESS:
     app.add_middleware(CloudflareAccessMiddleware)
+
+# ミドルウェアは後から追加したものが先に動くため、
+# Cloudflare Access の確認が済んだあとに承認判定が走る。
+app.add_middleware(ApprovalMiddleware)
 
 # ============================================================
 # 利用上限（コスト保護）
@@ -88,7 +129,7 @@ GLOBAL_LIMITS = {
     "chat":     _env_int("LIMIT_CHAT_GLOBAL", 600),
 }
 KIND_LABEL = {"evaluate": "評価レポートの作成", "research": "URLの調査", "chat": "AIへの質問"}
-ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+ADMIN_EMAILS = access.ADMIN_EMAILS
 
 MAX_CONCURRENT_EVALS = _env_int("MAX_CONCURRENT_EVALS", 4)
 EVAL_SLOTS = asyncio.Semaphore(MAX_CONCURRENT_EVALS)
@@ -98,9 +139,6 @@ MAX_EVAL_CHARS = 60000
 MAX_REPORT_CHARS = 120000
 MAX_QUESTION_CHARS = 3000
 
-_usage: dict[str, int] = {}
-
-
 def current_user(request: Request) -> str:
     return (request.headers.get("cf-access-authenticated-user-email") or "local").strip().lower()
 
@@ -109,36 +147,49 @@ def _today() -> str:
     return datetime.now(JST).strftime("%Y-%m-%d")
 
 
-def usage_snapshot(request: Request) -> dict:
+def _usage_key(kind: str, who: str) -> str:
+    return f"usage:{_today()}:{kind}:{who}"
+
+
+# 翌日の集計に残らないよう、鍵は2日で消す
+USAGE_TTL = 2 * 86400
+
+
+async def usage_snapshot(request: Request) -> dict:
     """現在の利用者の、本日の使用回数と上限を返す"""
-    user, day = current_user(request), _today()
+    user = current_user(request)
     unlimited = user in ADMIN_EMAILS
-    return {
-        kind: {
-            "used": _usage.get(f"{day}|{kind}|{user}", 0),
-            "limit": None if unlimited else USER_LIMITS[kind],
-        }
-        for kind in USER_LIMITS
-    }
+    out = {}
+    for kind in USER_LIMITS:
+        try:
+            used = await store.get_int(_usage_key(kind, user))
+        except store.StoreError:
+            used = 0
+        out[kind] = {"used": used, "limit": None if unlimited else USER_LIMITS[kind]}
+    return out
 
 
-def charge(request: Request, kind: str) -> str | None:
+async def charge(request: Request, kind: str) -> str | None:
     """上限内なら1回分を加算して None を返す。超過なら利用者向けの理由文を返す。"""
-    user, day = current_user(request), _today()
-    for stale in [k for k in _usage if not k.startswith(day)]:
-        del _usage[stale]
+    user = current_user(request)
     if user in ADMIN_EMAILS:
         return None
 
-    ukey, gkey = f"{day}|{kind}|{user}", f"{day}|{kind}|*"
-    if _usage.get(gkey, 0) >= GLOBAL_LIMITS[kind]:
-        logger.warning("global limit reached kind=%s", kind)
-        return f"本日は{KIND_LABEL[kind]}の全体上限に達しました。明日またお試しください。"
-    if _usage.get(ukey, 0) >= USER_LIMITS[kind]:
-        return (f"本日の{KIND_LABEL[kind]}は上限（{USER_LIMITS[kind]}回）に達しました。"
-                "明日（日本時間 0時）にリセットされます。")
-    _usage[ukey] = _usage.get(ukey, 0) + 1
-    _usage[gkey] = _usage.get(gkey, 0) + 1
+    # 先に判定し、通った場合だけ加算する。
+    # 加算してから判定すると、上限で拒否された呼び出しまで全体枠を消費し、
+    # 一人の連打で他の利用者の枠が尽きてしまう。
+    try:
+        if await store.get_int(_usage_key(kind, user)) >= USER_LIMITS[kind]:
+            return (f"本日の{KIND_LABEL[kind]}は上限（{USER_LIMITS[kind]}回）に達しました。"
+                    "明日（日本時間 0時）にリセットされます。")
+        if await store.get_int(_usage_key(kind, "*")) >= GLOBAL_LIMITS[kind]:
+            logger.warning("global limit reached kind=%s", kind)
+            return f"本日は{KIND_LABEL[kind]}の全体上限に達しました。明日またお試しください。"
+        await store.incr(_usage_key(kind, user), USAGE_TTL)
+        await store.incr(_usage_key(kind, "*"), USAGE_TTL)
+    except store.StoreError as e:
+        # 集計できなくても利用自体は止めない（最終的な歯止めは前払い残高）
+        logger.warning("usage counting failed kind=%s: %s", kind, e)
     return None
 
 
@@ -156,12 +207,19 @@ background:var(--bg);color:var(--text);font-family:-apple-system,"Hiragino Sans"
 .box{max-width:480px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}
 h1{font-size:1.25rem;margin:0 0 12px}p{margin:0 0 18px;color:var(--muted)}
 a{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;border-radius:8px;padding:10px 20px}
-</style></head><body><div class="box"><h1>ご利用を一時的に制限しています</h1>
-<p>__MSG__</p><a href="/">トップへ戻る</a></div></body></html>"""
+</style></head><body><div class="box"><h1>__TITLE__</h1>
+<p>__MSG__</p>__EXTRA__<a href="/">トップへ戻る</a></div></body></html>"""
+
+
+def render_notice(title: str, message: str, extra: str = "") -> str:
+    return (LIMIT_PAGE
+            .replace("__TITLE__", html.escape(title))
+            .replace("__MSG__", html.escape(message))
+            .replace("__EXTRA__", extra))
 
 
 def limit_page(message: str, status: int = 429) -> HTMLResponse:
-    return HTMLResponse(LIMIT_PAGE.replace("__MSG__", html.escape(message)), status_code=status)
+    return HTMLResponse(render_notice("ご利用を一時的に制限しています", message), status_code=status)
 
 
 # ============================================================
@@ -650,7 +708,7 @@ async def evaluate(
     if EVAL_SLOTS.locked():
         return limit_page("ただいま評価の依頼が集中しています。1〜2分ほど待ってからお試しください。")
     # 先に混雑・サイズを判定し、通った場合だけ回数を消費する
-    over = charge(request, "evaluate")
+    over = await charge(request, "evaluate")
     if over:
         return limit_page(over)
 
@@ -865,7 +923,7 @@ async def intake_start(request: Request, url: str = Form(...), mode: str = Form(
         url = normalize_url(url)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
-    over = charge(request, "research")
+    over = await charge(request, "research")
     if over:
         return limit_json(over)
     try:
@@ -889,7 +947,7 @@ async def intake_reply(request: Request, state: str = Form(...), question: str =
     """回答を受け取り、次の質問または充足判定を返す"""
     if len(state) + len(question) + len(answer) > MAX_EVAL_CHARS:
         return limit_json("入力が長すぎます。内容を絞ってください。", 413)
-    over = charge(request, "chat")
+    over = await charge(request, "chat")
     if over:
         return limit_json(over)
     try:
@@ -935,7 +993,7 @@ async def report_chat(
         return limit_json("レポートが大きすぎるため質問できません。", 413)
     if len(question) > MAX_QUESTION_CHARS:
         return limit_json(f"質問が長すぎます（{MAX_QUESTION_CHARS:,}文字まで）。", 413)
-    over = charge(request, "chat")
+    over = await charge(request, "chat")
     if over:
         return limit_json(over)
     try:
@@ -997,7 +1055,7 @@ async def autofill(request: Request, url: str = Form(...), mode: str = Form(defa
         url = normalize_url(url)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
-    over = charge(request, "research")
+    over = await charge(request, "research")
     if over:
         return limit_json(over)
     try:
@@ -1010,9 +1068,137 @@ async def autofill(request: Request, url: str = Form(...), mode: str = Form(defa
 @app.get("/usage")
 async def usage(request: Request):
     """現在の利用者の、本日の使用回数と上限"""
-    return {"user": current_user(request), "usage": usage_snapshot(request)}
+    return {"user": current_user(request), "usage": await usage_snapshot(request)}
+
+
+@app.get("/no-access", response_class=HTMLResponse)
+async def no_access(request: Request):
+    """未承認の利用者に申請方法を案内する"""
+    email = current_user(request)
+    if await access.is_approved(email):
+        return RedirectResponse("/", status_code=303)
+    pending = await store.hgetall_json(access.K_PENDING)
+    return templates.TemplateResponse(request, "no_access.html", {
+        "email": email,
+        "already_requested": email in pending,
+    })
+
+
+@app.post("/request")
+async def request_access_route(request: Request, note: str = Form(default="")):
+    """利用申請を受け付ける"""
+    email = current_user(request)
+    try:
+        message = await access.request_access(email, note)
+    except store.StoreError:
+        return JSONResponse(status_code=503, content={"error": "ただいま受け付けできません。時間をおいてお試しください。"})
+    return JSONResponse({"message": message})
+
+
+@app.get("/invite/{token}", response_class=HTMLResponse)
+async def invite(request: Request, token: str):
+    """招待リンク / QR からの自動承認"""
+    email = current_user(request)
+    try:
+        ok, message = await access.redeem_invite(token, email)
+    except store.StoreError:
+        return HTMLResponse(render_notice("ただいま確認できません",
+                                          "少し時間をおいてお試しください。"), status_code=503)
+    if ok:
+        return HTMLResponse(render_notice("ご利用いただけます",
+                                          f"{email} を登録しました。", ""), status_code=200)
+    return HTMLResponse(render_notice("ご利用いただけません", message), status_code=403)
+
+
+def require_admin(request: Request):
+    return access.is_admin(current_user(request))
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """承認の管理画面"""
+    if not require_admin(request):
+        return HTMLResponse(render_notice("権限がありません",
+                                          "この画面は管理者のみ利用できます。"), status_code=403)
+    return templates.TemplateResponse(request, "admin.html", {
+        "me": current_user(request),
+        "store_backend": store.describe(),
+        "auto_domains": sorted(access.AUTO_APPROVE_DOMAINS),
+        "open_access": access.OPEN_ACCESS,
+    })
+
+
+@app.get("/admin/data")
+async def admin_data(request: Request):
+    if not require_admin(request):
+        return JSONResponse(status_code=403, content={"error": "権限がありません"})
+    try:
+        return JSONResponse({
+            "pending": await access.list_pending(),
+            "approved": await access.list_approved(),
+        })
+    except store.StoreError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+
+
+@app.post("/admin/approve")
+async def admin_approve(request: Request, email: str = Form(...)):
+    if not require_admin(request):
+        return JSONResponse(status_code=403, content={"error": "権限がありません"})
+    target = email.strip().lower()
+    if "@" not in target:
+        return JSONResponse(status_code=400, content={"error": "メールアドレスを指定してください"})
+    try:
+        await access.approve(target)
+    except store.StoreError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    return JSONResponse({"ok": True, "email": target})
+
+
+@app.post("/admin/revoke")
+async def admin_revoke(request: Request, email: str = Form(...)):
+    if not require_admin(request):
+        return JSONResponse(status_code=403, content={"error": "権限がありません"})
+    target = email.strip().lower()
+    if access.is_admin(target):
+        return JSONResponse(status_code=400, content={"error": "管理者は解除できません"})
+    try:
+        await access.revoke(target)
+    except store.StoreError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    return JSONResponse({"ok": True, "email": target})
+
+
+@app.post("/admin/reject")
+async def admin_reject(request: Request, email: str = Form(...)):
+    if not require_admin(request):
+        return JSONResponse(status_code=403, content={"error": "権限がありません"})
+    try:
+        await store.hdel(access.K_PENDING, email.strip().lower())
+    except store.StoreError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    return JSONResponse({"ok": True})
+
+
+@app.post("/admin/invite")
+async def admin_invite(
+    request: Request,
+    days: int = Form(default=7),
+    max_uses: int = Form(default=50),
+    label: str = Form(default=""),
+):
+    """招待リンクを発行する（QRは画面側で生成）"""
+    if not require_admin(request):
+        return JSONResponse(status_code=403, content={"error": "権限がありません"})
+    try:
+        rec = await access.create_invite(days, max_uses, label)
+    except store.StoreError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({**rec, "url": f"{base}/invite/{rec['token']}"})
 
 
 @app.get("/health")
 async def health():
+    """死活監視。共有ストアの状態も返す"""
     return {"status": "ok", "models": MODELS}

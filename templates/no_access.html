@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>利用申請 | 事業評価AI</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --text:#e6e8ec; --muted:#9aa3b2;
+          --line:rgba(255,255,255,.12); --accent:#6366f1; --accent-hover:#4f46e5; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --card:#fff; --text:#1a1d23; --muted:#666e7d; --line:rgba(0,0,0,.12); }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         padding:24px; background:var(--bg); color:var(--text); line-height:1.8;
+         font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  .box { width:100%; max-width:520px; background:var(--card); border:1px solid var(--line);
+         border-radius:14px; padding:28px; }
+  h1 { font-size:1.3rem; margin:0 0 10px; }
+  p { color:var(--muted); margin:0 0 16px; font-size:.92rem; }
+  .who { font-size:.85rem; background:rgba(127,127,127,.1); border-radius:8px;
+         padding:9px 12px; margin-bottom:18px; word-break:break-all; }
+  textarea { width:100%; min-height:88px; background:transparent; color:var(--text);
+             border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+             font:inherit; font-size:.92rem; resize:vertical; }
+  button { margin-top:14px; width:100%; background:var(--accent); color:#fff; border:none;
+           border-radius:8px; padding:12px; font-size:.95rem; cursor:pointer; font-family:inherit; }
+  button:hover:not(:disabled) { background:var(--accent-hover); }
+  button:disabled { opacity:.5; cursor:default; }
+  .msg { margin-top:16px; font-size:.9rem; }
+  .ok { color:#2e9e5b; }
+  .err { color:#e05252; }
+  .hint { font-size:.8rem; color:var(--muted); margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>利用申請</h1>
+  <p>このサービスは承認された方のみご利用いただけます。下のボタンから申請してください。</p>
+  <div class="who">ログイン中: {{ email }}</div>
+
+  {% if already_requested %}
+    <div class="msg ok">申請は受付済みです。承認までお待ちください。</div>
+  {% else %}
+    <label for="note" style="font-size:.88rem">ご所属やご利用目的（任意）</label>
+    <textarea id="note" placeholder="例: G'sアカデミー 2026年春期 / 自社事業の評価に使いたい"></textarea>
+    <button id="send">利用を申請する</button>
+    <div class="msg" id="msg"></div>
+  {% endif %}
+
+  <div class="hint">
+    招待リンクやQRコードをお持ちの場合は、そちらを開くとすぐにご利用いただけます。
+  </div>
+</div>
+
+<script>
+  const btn = document.getElementById('send');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      const msg = document.getElementById('msg');
+      btn.disabled = true;
+      msg.className = 'msg';
+      msg.textContent = '送信しています…';
+      try {
+        const body = new FormData();
+        body.append('note', document.getElementById('note').value.trim());
+        const res = await fetch('/request', { method: 'POST', body });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        msg.className = 'msg ok';
+        msg.textContent = data.message;
+        btn.textContent = '申請済み';
+      } catch (e) {
+        msg.className = 'msg err';
+        msg.textContent = '送信できませんでした: ' + (e.message || e);
+        btn.disabled = false;
+      }
+    });
+  }
+</script>
+</body>
+</html>

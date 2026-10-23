@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>利用者の管理 | 事業評価AI</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --text:#e6e8ec; --muted:#9aa3b2;
+          --line:rgba(255,255,255,.12); --accent:#6366f1; --accent-hover:#4f46e5;
+          --ok:#2e9e5b; --warn:#d9742b; --err:#e05252; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --card:#fff; --text:#1a1d23; --muted:#666e7d; --line:rgba(0,0,0,.12); }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); line-height:1.75;
+         font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  .wrap { max-width:820px; margin:0 auto; padding:26px 16px 70px; }
+  h1 { font-size:1.5rem; margin:0 0 6px; }
+  .sub { color:var(--muted); font-size:.85rem; margin:0 0 22px; }
+  .sub a { color:inherit; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:18px 20px; margin-bottom:18px; }
+  h2 { font-size:1rem; margin:0 0 14px; display:flex; align-items:center; gap:8px; }
+  .count { font-size:.75rem; background:rgba(99,102,241,.18); border-radius:20px; padding:1px 9px; }
+  ul { list-style:none; padding:0; margin:0; }
+  li { display:flex; align-items:center; gap:10px; padding:10px 0;
+       border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  li:last-child { border-bottom:none; }
+  .email { flex:1 1 220px; font-size:.9rem; word-break:break-all; }
+  .meta { font-size:.75rem; color:var(--muted); }
+  .note { flex-basis:100%; font-size:.8rem; color:var(--muted); }
+  button { border:none; border-radius:7px; padding:7px 14px; font-size:.82rem;
+           cursor:pointer; font-family:inherit; }
+  button:disabled { opacity:.5; cursor:default; }
+  .approve { background:var(--ok); color:#fff; }
+  .reject, .revoke { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .reject:hover, .revoke:hover { color:var(--err); border-color:var(--err); }
+  .empty { color:var(--muted); font-size:.86rem; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  label { display:block; font-size:.78rem; color:var(--muted); margin-bottom:4px; }
+  input { background:transparent; color:var(--text); border:1px solid var(--line);
+          border-radius:7px; padding:8px 10px; font:inherit; font-size:.88rem; }
+  input[type=number] { width:92px; }
+  .primary { background:var(--accent); color:#fff; padding:9px 18px; font-size:.88rem; }
+  .primary:hover:not(:disabled) { background:var(--accent-hover); }
+  .invite-out { margin-top:16px; display:none; }
+  .invite-out.on { display:block; }
+  .invite-url { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  .invite-url code { flex:1 1 240px; font-size:.8rem; background:rgba(127,127,127,.12);
+                     padding:8px 10px; border-radius:7px; word-break:break-all; }
+  #qr { display:inline-block; background:#fff; padding:12px; border-radius:10px; }
+  .msg { font-size:.84rem; margin-top:10px; min-height:1.3em; }
+  .msg.err { color:var(--err); }
+  .msg.ok { color:var(--ok); }
+  .mode { font-size:.78rem; color:var(--muted); margin-top:10px; }
+  .pill { display:inline-block; border:1px solid var(--line); border-radius:20px;
+          padding:1px 10px; margin-right:6px; font-size:.75rem; }
+  .danger { color:var(--warn); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>利用者の管理</h1>
+  <p class="sub">{{ me }} でログイン中 · <a href="/">サービスへ戻る</a></p>
+
+  <!-- 招待リンク / QR -->
+  <div class="card">
+    <h2>招待リンク / QRを発行</h2>
+    <div class="row">
+      <div>
+        <label for="label">用途のメモ（任意）</label>
+        <input type="text" id="label" placeholder="例: G's 2026春期">
+      </div>
+      <div>
+        <label for="days">有効日数</label>
+        <input type="number" id="days" value="7" min="1" max="90">
+      </div>
+      <div>
+        <label for="uses">利用上限（人）</label>
+        <input type="number" id="uses" value="50" min="1" max="500">
+      </div>
+      <button class="primary" id="make-invite">発行する</button>
+    </div>
+    <div class="msg" id="invite-msg"></div>
+    <div class="invite-out" id="invite-out">
+      <div class="invite-url">
+        <code id="invite-url"></code>
+        <button class="primary" id="copy-url">コピー</button>
+      </div>
+      <div id="qr"></div>
+      <div class="mode">このQRを読み取った人は、ログインするだけで自動的に承認されます。</div>
+    </div>
+  </div>
+
+  <!-- 承認待ち -->
+  <div class="card">
+    <h2>承認待ち <span class="count" id="pending-count">0</span></h2>
+    <ul id="pending"></ul>
+    <div class="empty" id="pending-empty">承認待ちの申請はありません。</div>
+  </div>
+
+  <!-- 利用中 -->
+  <div class="card">
+    <h2>利用中 <span class="count" id="approved-count">0</span></h2>
+    <ul id="approved"></ul>
+    <div class="empty" id="approved-empty">まだ誰も登録されていません。</div>
+    <div class="row" style="margin-top:14px">
+      <div style="flex:1 1 240px">
+        <label for="manual">メールアドレスを直接追加</label>
+        <input type="text" id="manual" placeholder="name@example.com" style="width:100%">
+      </div>
+      <button class="primary" id="add-manual">追加</button>
+    </div>
+    <div class="msg" id="manual-msg"></div>
+  </div>
+
+  <!-- 現在の設定 -->
+  <div class="card">
+    <h2>現在の設定</h2>
+    <div class="mode">
+      <span class="pill">保存先: {{ store_backend }}</span>
+      {% if store_backend == 'memory' %}
+        <span class="danger">共有ストアが未設定です。承認はマシンの再起動で消えます。</span>
+      {% endif %}
+    </div>
+    <div class="mode">
+      {% if auto_domains %}
+        自動承認ドメイン: {% for d in auto_domains %}<span class="pill">@{{ d }}</span>{% endfor %}
+      {% else %}
+        自動承認ドメイン: なし
+      {% endif %}
+    </div>
+    {% if open_access %}
+      <div class="mode danger">OPEN_ACCESS が有効です。承認なしで誰でも利用できます。</div>
+    {% endif %}
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+
+  function fmt(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  }
+
+  async function post(url, fields) {
+    const body = new FormData();
+    Object.entries(fields).forEach(([k, v]) => body.append(k, v));
+    const res = await fetch(url, { method:'POST', body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  function row(rec, buttons, metaText) {
+    const li = document.createElement('li');
+    const em = document.createElement('span');
+    em.className = 'email';
+    em.textContent = rec.email;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = metaText || '';
+    li.append(em, meta, ...buttons);
+    if (rec.note) {
+      const n = document.createElement('div');
+      n.className = 'note';
+      n.textContent = rec.note;
+      li.appendChild(n);
+    }
+    return li;
+  }
+
+  function mkBtn(text, cls, onClick) {
+    const b = document.createElement('button');
+    b.className = cls;
+    b.textContent = text;
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try { await onClick(); await load(); }
+      catch (e) { alert('失敗しました: ' + (e.message || e)); b.disabled = false; }
+    });
+    return b;
+  }
+
+  async function load() {
+    const res = await fetch('/admin/data');
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || '読み込めませんでした'); return; }
+
+    const pu = $('pending'); pu.innerHTML = '';
+    data.pending.forEach(rec => {
+      pu.appendChild(row(rec, [
+        mkBtn('承認', 'approve', () => post('/admin/approve', { email: rec.email })),
+        mkBtn('却下', 'reject', () => post('/admin/reject', { email: rec.email })),
+      ], fmt(rec.requested_at)));
+    });
+    $('pending-count').textContent = data.pending.length;
+    $('pending-empty').style.display = data.pending.length ? 'none' : 'block';
+
+    const au = $('approved'); au.innerHTML = '';
+    data.approved.forEach(rec => {
+      const via = rec.via ? '（' + rec.via + '）' : '';
+      au.appendChild(row(rec, [
+        mkBtn('解除', 'revoke', () => post('/admin/revoke', { email: rec.email })),
+      ], fmt(rec.approved_at) + via));
+    });
+    $('approved-count').textContent = data.approved.length;
+    $('approved-empty').style.display = data.approved.length ? 'none' : 'block';
+  }
+
+  $('make-invite').addEventListener('click', async () => {
+    const btn = $('make-invite'), msg = $('invite-msg');
+    btn.disabled = true; msg.className = 'msg'; msg.textContent = '発行しています…';
+    try {
+      const data = await post('/admin/invite', {
+        days: $('days').value, max_uses: $('uses').value, label: $('label').value.trim(),
+      });
+      $('invite-url').textContent = data.url;
+      $('qr').innerHTML = '';
+      new QRCode($('qr'), { text: data.url, width: 190, height: 190 });
+      $('invite-out').classList.add('on');
+      msg.className = 'msg ok';
+      msg.textContent = '発行しました（' + data.max_uses + '人まで / ' + fmt(data.expires_at) + ' まで有効）';
+    } catch (e) {
+      msg.className = 'msg err';
+      msg.textContent = '発行できませんでした: ' + (e.message || e);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('copy-url').addEventListener('click', () => {
+    navigator.clipboard.writeText($('invite-url').textContent).then(() => {
+      const b = $('copy-url');
+      b.textContent = 'コピーしました';
+      setTimeout(() => b.textContent = 'コピー', 2000);
+    });
+  });
+
+  $('add-manual').addEventListener('click', async () => {
+    const msg = $('manual-msg'), input = $('manual');
+    const email = input.value.trim();
+    if (!email) { msg.className = 'msg err'; msg.textContent = 'メールアドレスを入力してください'; return; }
+    msg.className = 'msg'; msg.textContent = '追加しています…';
+    try {
+      await post('/admin/approve', { email });
+      input.value = '';
+      msg.className = 'msg ok';
+      msg.textContent = '追加しました';
+      await load();
+    } catch (e) {
+      msg.className = 'msg err';
+      msg.textContent = '追加できませんでした: ' + (e.message || e);
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>
