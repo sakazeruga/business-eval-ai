@@ -89,12 +89,12 @@ class ApprovalMiddleware(BaseHTTPMiddleware):
         return JSONResponse(status_code=403, content={"error": "利用が許可されていません。"})
 
 
+# ミドルウェアは「後から追加したものが外側（先に実行）」になる。
+# Cloudflare Access の確認を最も外側に置き、未認証の直アクセスは
+# 承認判定に到達する前に遮断する。
+app.add_middleware(ApprovalMiddleware)
 if REQUIRE_CF_ACCESS:
     app.add_middleware(CloudflareAccessMiddleware)
-
-# ミドルウェアは後から追加したものが先に動くため、
-# Cloudflare Access の確認が済んだあとに承認判定が走る。
-app.add_middleware(ApprovalMiddleware)
 
 # ============================================================
 # 利用上限（コスト保護）

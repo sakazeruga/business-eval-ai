@@ -156,5 +156,22 @@ store.sismember = orig
 r = c.get("/", headers=H("owner@example.com"), follow_redirects=False)
 check("復旧後は通る", r.status_code == 200, r.status_code)
 
+# --- Cloudflare Access が最も外側であること ---
+# REQUIRE_CF_ACCESS=true の構成に組み直して、順序を検証する
+import importlib  # noqa: E402
+
+os.environ["REQUIRE_CF_ACCESS"] = "true"
+M2 = importlib.reload(M)
+c2 = TestClient(M2.app)
+r = c2.get("/", follow_redirects=False)          # ヘッダー無し = 直アクセス
+check("直アクセスは承認判定より前に403", r.status_code == 403, r.status_code)
+r = c2.get("/no-access", follow_redirects=False)
+check("申請画面も直アクセスなら403", r.status_code == 403, r.status_code)
+r = c2.get("/health")
+check("ヘルスチェックは直アクセスでも200", r.status_code == 200, r.status_code)
+r = c2.get("/", headers=H("owner@example.com"), follow_redirects=False)
+check("Access経由の管理者は通る", r.status_code == 200, r.status_code)
+os.environ["REQUIRE_CF_ACCESS"] = "false"
+
 print("\nfailures:", fails)
 sys.exit(1 if fails else 0)
