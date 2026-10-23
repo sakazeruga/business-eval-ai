@@ -26,6 +26,7 @@ from prompts import (
     SYSTEM_BASE,
     build_context,
     prompt_cashflow,
+    prompt_competitors,
     prompt_coo_diagnosis,
     prompt_cross_swot,
     prompt_marketing,
@@ -303,7 +304,7 @@ MODELS = {
 }
 
 MAX_TOKENS = {
-    "competitors":     4096,
+    "competitors":     8192,
     "why_now":         6144,
     "operations":      4096,
     "npv_exit":        6000,
@@ -459,28 +460,12 @@ async def call_section(prompt_text: str, section_key: str) -> str:
 
 
 async def fetch_competitors(business_idea_summary: str) -> str:
-    """Web検索付きで競合を自動調査する（失敗しても評価全体は止めない）"""
-    prompt = f"""以下の事業の主要競合企業を5社、Markdown形式でリストアップしてください。
-
-事業概要:
-{business_idea_summary}
-
-出力形式（必ずMarkdownで）:
-### 主要競合調査
-
-| # | 社名 | 事業概要 | 差別化ポイント |
-|---|---|---|---|
-| 1 | [社名] | [概要] | [ポイント] |
-| 2 | ... | ... | ... |
-
-**この事業との最大の差別化軸:**
-[1〜2文で]
-"""
+    """Web検索付きで競合を分析する（失敗しても評価全体は止めない）"""
     try:
-        return await call_section(prompt, "competitors")
-    except Exception as e:  # 競合調査の失敗で全セクションを落とさない
+        return await call_section(prompt_competitors(business_idea_summary), "competitors")
+    except Exception as e:  # 競合分析の失敗で全セクションを落とさない
         logger.exception("competitors failed")
-        return f"⚠️ 競合調査に失敗しました: {e}"
+        return f"⚠️ 競合分析に失敗しました: {e}"
 
 
 # 表示順。クロスSWOT は全セクションの結果を要約して渡すため必ず最後。
@@ -781,9 +766,7 @@ async def evaluate(
         context += f"\n\n## 追加ヒアリング（AI対話で取得）\n{extra_context.strip()}"
 
     # 画面に出るカード数。競合調査カードは startup モードのみ表示される
-    total = len(SECTION_ORDER["startup" if mode == "startup" else "coo"]) + 1
-    if mode == "startup":
-        total += 1
+    total = len(SECTION_ORDER["startup" if mode == "startup" else "coo"]) + 2
 
     async def generate():
         async with EVAL_SLOTS:
@@ -1255,9 +1238,11 @@ async def admin_invite(
 @app.get("/health")
 async def health():
     """死活監視。認証と保存先の状態も返す"""
+    store_ok = await store.healthy()
     return {
-        "status": "ok",
+        "status": "ok" if store_ok else "degraded",
         "access": cfaccess.describe(),
         "store": store.describe(),
+        "store_reachable": store_ok,
         "models": MODELS,
     }

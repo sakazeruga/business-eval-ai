@@ -14,7 +14,7 @@
 |---|---|---|
 | **Why Me** | 創業者適性（情報収集力・継続性・巻き込み力）の3因子乗算スコア | Claude Haiku 5.5 |
 | **Why Now** | 市場成長性 × 潜在爆発力 × 社会還元性 | Claude Haiku 5.5 + Web検索（Perplexity） |
-| **競合調査** | 主要5社の自動リサーチ＋差別化軸 | Claude Haiku 5.5 + Web検索（Perplexity） |
+| **競合分析** | 主要5社の自動リサーチ＋KBF（購買決定要因）/ KSF（重要成功要因）の特定 | Claude Haiku 5.5 + Web検索（Perplexity） |
 | **VRIO分析** | 持続的競争優位の4軸評価 | Claude Haiku 5.5 |
 | **マーケティング** | GTM戦略・CAC/LTV試算・チャネル蓋然性 | Claude Haiku 5.5 |
 | **オペレーション** | 実行体制・クリティカルパス・ボトルネック | GPT-6 Luna |

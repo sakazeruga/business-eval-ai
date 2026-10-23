@@ -441,10 +441,6 @@
   </div>
 
   <!-- セクション出力 -->
-  {# 保存済みレポートの復元時はモードが不明なため、両モードのセクションを描画し、
-     内容が無いものはクライアント側で取り除く #}
-  {% if mode == 'startup' or restore %}
-
     <div class="section" id="competitors" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-icon">🔍</span>
@@ -455,6 +451,11 @@
       </div>
       <div class="section-body" data-section="competitors">{% if streaming %}{% else %}{{ results.competitors | default('取得できませんでした') }}{% endif %}</div>
     </div>
+
+
+  {# 保存済みレポートの復元時はモードが不明なため、両モードのセクションを描画し、
+     内容が無いものはクライアント側で取り除く #}
+  {% if mode == 'startup' or restore %}
 
     <div class="section" id="why-me" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
