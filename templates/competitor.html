@@ -87,7 +87,8 @@
   <div class="result card" id="result"></div>
   <div class="actions" id="actions" style="display:none">
     <button class="ghost" onclick="window.print()">📄 PDFで保存</button>
-    <button class="ghost" id="copy-md">📋 Markdownをコピー</button>
+    <button id="save-md">⬇ Markdownで保存</button>
+    <button class="ghost" id="copy-md">📋 コピー</button>
   </div>
 </div>
 
@@ -95,6 +96,7 @@
 <script>
   const $ = id => document.getElementById(id);
   let lastMarkdown = '';
+  let lastHost = '';
 
   fetch('/usage').then(r => r.json()).then(d => {
     const r = d.usage && d.usage.research;
@@ -130,6 +132,8 @@
       if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
 
       lastMarkdown = data.markdown;
+      try { lastHost = new URL(data.url).hostname.replace(/^www\./, ''); }
+      catch (e) { lastHost = 'competitor'; }
       $('result').innerHTML = marked.parse(data.markdown);
       $('result').classList.add('on');
       $('actions').style.display = 'flex';
@@ -144,11 +148,31 @@
     }
   });
 
+  $('save-md').addEventListener('click', () => {
+    const d = new Date();
+    const stamp = d.getFullYear()
+      + String(d.getMonth() + 1).padStart(2, '0')
+      + String(d.getDate()).padStart(2, '0');
+    const name = '競合分析_' + (lastHost || 'competitor') + '_' + stamp + '.md';
+    // BOM を付けると Excel やメモ帳でも文字化けしない
+    const blob = new Blob(['\ufeff' + lastMarkdown], { type: 'text/markdown; charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    const b = $('save-md');
+    b.textContent = '✅ 保存しました';
+    setTimeout(() => b.textContent = '⬇ Markdownで保存', 2200);
+  });
+
   $('copy-md').addEventListener('click', () => {
     navigator.clipboard.writeText(lastMarkdown).then(() => {
       const b = $('copy-md');
       b.textContent = '✅ コピーしました';
-      setTimeout(() => b.textContent = '📋 Markdownをコピー', 2200);
+      setTimeout(() => b.textContent = '📋 コピー', 2200);
     });
   });
 
