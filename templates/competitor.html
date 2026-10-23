@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>競合分析 | 事業評価AI</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --text:#e6e8ec; --muted:#9aa3b2;
+          --line:rgba(255,255,255,.12); --accent:#6366f1; --accent-hover:#4f46e5; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --card:#fff; --text:#1a1d23; --muted:#666e7d; --line:rgba(0,0,0,.12); }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); line-height:1.8;
+         font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  .wrap { max-width:860px; margin:0 auto; padding:26px 16px 70px; }
+  h1 { font-size:1.9rem; font-weight:700; margin:0 0 10px; line-height:1.35; }
+  h1 .ic { color:var(--accent); }
+  .lead { color:var(--text); opacity:.8; font-size:.95rem; margin:0 0 12px; }
+  .back { display:inline-block; color:var(--muted); font-size:.85rem; text-decoration:none;
+          border-bottom:1px solid var(--line); padding-bottom:1px; }
+  .back:hover { color:var(--text); border-color:var(--accent); }
+  .usage-note { font-size:.78rem; color:var(--muted); margin-top:10px; min-height:1.2em; }
+
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:18px 20px; margin:20px 0; }
+  label { display:block; font-size:.82rem; color:var(--muted); margin-bottom:5px; }
+  input[type=text], textarea { width:100%; background:transparent; color:var(--text);
+    border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+    font:inherit; font-size:.93rem; }
+  textarea { min-height:76px; resize:vertical; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px; }
+  .row > div { flex:1 1 260px; }
+  button { background:var(--accent); color:#fff; border:none; border-radius:8px;
+           padding:11px 22px; font-size:.93rem; cursor:pointer; font-family:inherit; }
+  button:hover:not(:disabled) { background:var(--accent-hover); }
+  button:disabled { opacity:.5; cursor:default; }
+  .msg { font-size:.86rem; margin-top:12px; min-height:1.3em; }
+  .err { color:#e05252; }
+  .hint { font-size:.8rem; color:var(--muted); margin-top:10px; }
+
+  .result { display:none; }
+  .result.on { display:block; }
+  .result h3 { font-size:1rem; margin:1.6rem 0 .7rem; padding-bottom:.4rem;
+               border-bottom:1px solid var(--line); }
+  .result h3:first-child { margin-top:0; }
+  .result table { width:100%; border-collapse:collapse; margin:.8rem 0; font-size:.86rem; }
+  .result th, .result td { border:1px solid var(--line); padding:.5rem .65rem;
+                           text-align:left; vertical-align:top; }
+  .result th { background:rgba(127,127,127,.1); font-weight:600; }
+  .result a { color:var(--accent); word-break:break-all; }
+  .result ul { padding-left:1.3em; }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+  .ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .ghost:hover:not(:disabled) { background:transparent; border-color:var(--accent); }
+  .spin { display:inline-block; width:14px; height:14px; vertical-align:-2px;
+          border:2px solid var(--line); border-top-color:currentColor;
+          border-radius:50%; animation:s .9s linear infinite; }
+  @keyframes s { to { transform:rotate(360deg); } }
+  @media print { .card, .back, .actions, .usage-note { display:none; } .result { display:block; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="ic">🔍</span> 競合分析</h1>
+  <p class="lead">競合企業のURLを入れると、公開情報からその企業の KBF（顧客が選ぶ理由）と
+     KSF（それを支える能力）、弱点と攻めどころを分析します。</p>
+  <a class="back" href="/">← トップへ戻る</a>
+  <div class="usage-note" id="usage-note"></div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label for="url">競合企業のURL</label>
+        <input type="text" inputmode="url" id="url" placeholder="example.co.jp（https:// は省略可）">
+      </div>
+      <button id="go">分析する</button>
+    </div>
+    <div>
+      <label for="own">自社の事業（任意）</label>
+      <textarea id="own" placeholder="入力すると、この競合と比べて取るべき差別化まで出します。&#10;例: 図面PDFから見積を自動生成するSaaS。月額5万円。"></textarea>
+    </div>
+    <div class="msg" id="msg"></div>
+    <div class="hint">公開情報のみを調べます。確認できない項目は「未確認」と表示されます。</div>
+  </div>
+
+  <div class="result card" id="result"></div>
+  <div class="actions" id="actions" style="display:none">
+    <button class="ghost" onclick="window.print()">📄 PDFで保存</button>
+    <button class="ghost" id="copy-md">📋 Markdownをコピー</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let lastMarkdown = '';
+
+  fetch('/usage').then(r => r.json()).then(d => {
+    const r = d.usage && d.usage.research;
+    if (!r || r.limit === null) return;
+    $('usage-note').textContent = '本日の調査: あと ' + Math.max(0, r.limit - r.used)
+      + ' 回（1日 ' + r.limit + ' 回まで）';
+  }).catch(() => {});
+
+  $('url').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('go').click(); }
+  });
+
+  $('go').addEventListener('click', async () => {
+    const url = $('url').value.trim();
+    if (!url) { $('msg').innerHTML = '<span class="err">URLを入力してください</span>'; return; }
+
+    const btn = $('go');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span> 分析中';
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      $('msg').textContent = '公開情報を調べています… ' + Math.round((Date.now() - t0) / 1000) + '秒（30〜60秒）';
+    }, 1000);
+    $('msg').textContent = '公開情報を調べています…';
+
+    try {
+      const body = new FormData();
+      body.append('url', url);
+      body.append('own_business', $('own').value.trim());
+      const res = await fetch('/competitor/analyze', { method: 'POST', body });
+      const data = await res.json();
+      clearInterval(tick);
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+
+      lastMarkdown = data.markdown;
+      $('result').innerHTML = marked.parse(data.markdown);
+      $('result').classList.add('on');
+      $('actions').style.display = 'flex';
+      $('msg').textContent = '分析しました（' + data.url + '）';
+      $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      clearInterval(tick);
+      $('msg').innerHTML = '<span class="err">分析できませんでした: ' + esc(e.message || e) + '</span>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '分析する';
+    }
+  });
+
+  $('copy-md').addEventListener('click', () => {
+    navigator.clipboard.writeText(lastMarkdown).then(() => {
+      const b = $('copy-md');
+      b.textContent = '✅ コピーしました';
+      setTimeout(() => b.textContent = '📋 Markdownをコピー', 2200);
+    });
+  });
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+</script>
+</body>
+</html>

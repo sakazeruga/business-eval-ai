@@ -422,7 +422,7 @@
     <h3>SECTIONS</h3>
     <ul class="toc-list">
       {% if mode == 'startup' %}
-        <li><a href="#competitors">① 競合調査</a></li>
+        <li><a href="#competitors">① 競合分析</a></li>
         <li><a href="#why-me">② Why Me</a></li>
         <li><a href="#why-now">③ Why Now</a></li>
         <li><a href="#vrio">④ VRIO</a></li>
@@ -432,10 +432,11 @@
         <li><a href="#npv-exit">⑧ NPV/EXIT</a></li>
         <li><a href="#cross-swot">⑨ クロスSWOT / 打開策</a></li>
       {% else %}
-        <li><a href="#coo-diagnosis">① COO診断</a></li>
-        <li><a href="#vrio">② VRIO</a></li>
-        <li><a href="#cashflow">③ CF戦略</a></li>
-        <li><a href="#cross-swot">④ クロスSWOT / 打開策</a></li>
+        <li><a href="#competitors">① 競合分析</a></li>
+        <li><a href="#coo-diagnosis">② COO診断</a></li>
+        <li><a href="#vrio">③ VRIO</a></li>
+        <li><a href="#cashflow">④ CF戦略</a></li>
+        <li><a href="#cross-swot">⑤ クロスSWOT / 打開策</a></li>
       {% endif %}
     </ul>
   </div>
@@ -444,7 +445,7 @@
     <div class="section" id="competitors" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-icon">🔍</span>
-        <span class="section-title">① 競合調査（AI自動）</span>
+        <span class="section-title">① 競合分析 — KBF / KSF</span>
         <span class="cat-badge">分析</span>
         <span class="model-tag">{{ models.competitors }}</span>
         <span class="toggle-icon">▼</span>
@@ -539,7 +540,7 @@
     <div class="section" id="coo-diagnosis" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-icon">🔍</span>
-        <span class="section-title">① COO診断 — 財務・オペレーション問題マップ</span>
+        <span class="section-title">② COO診断 — 財務・オペレーション問題マップ</span>
         <span class="cat-badge">分析</span>
         <span class="model-tag">{{ models.coo_diagnosis }}</span>
         <span class="toggle-icon">▼</span>
@@ -551,7 +552,7 @@
     <div class="section" id="vrio" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-icon">🏆</span>
-        <span class="section-title">② VRIO — 競争優位性分析</span>
+        <span class="section-title">③ VRIO — 競争優位性分析</span>
         <span class="cat-badge">分析</span>
         <span class="model-tag">{{ models.vrio }}</span>
         <span class="toggle-icon">▼</span>
@@ -562,7 +563,7 @@
     <div class="section" id="cashflow" data-category="financial">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-icon">💰</span>
-        <span class="section-title">③ 財務戦略評価（CF）</span>
+        <span class="section-title">④ 財務戦略評価（CF）</span>
         <span class="cat-badge">財務</span>
         <span class="model-tag">{{ models.cashflow }}</span>
         <span class="toggle-icon">▼</span>
@@ -577,7 +578,7 @@
     <div class="section-header" onclick="toggleSection(this)">
       <span class="section-icon">🎯</span>
       <span class="section-title">
-        {% if mode == 'startup' %}⑨{% else %}④{% endif %}
+        {% if mode == 'startup' %}⑨{% else %}⑤{% endif %}
         クロスSWOT / 追加ソリューション / 打開策
       </span>
       <span class="cat-badge">提案</span>

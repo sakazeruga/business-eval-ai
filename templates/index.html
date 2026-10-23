@@ -157,6 +157,18 @@
       .quick-cta-arrow { display: none; }
     }
 
+    /* 単体ツールへの導線 */
+    .tool-link { display:flex; align-items:center; gap:14px; text-decoration:none; color:inherit;
+      border:1px solid var(--border, rgba(128,128,128,.25)); border-radius:12px;
+      padding:14px 18px; margin-bottom:18px; transition:border-color .15s; }
+    .tool-link:hover { border-color: var(--accent, #6366f1); }
+    .tool-ic { font-size:1.3rem; }
+    .tool-main { flex:1; display:flex; flex-direction:column; }
+    .tool-title { font-size:1rem; font-weight:600; }
+    .tool-desc { font-size:.82rem; opacity:.7; }
+    .tool-arrow { color: var(--accent, #6366f1); }
+    @media (max-width:480px) { .tool-arrow { display:none; } }
+
     /* 保存したレポート */
     .hidden { display: none; }
     .saved-list { list-style: none; padding: 0; margin: 0; }
@@ -271,6 +283,15 @@
       <ul class="saved-list" id="saved-list"></ul>
       <div class="saved-hint">このブラウザにのみ保存されます。他の端末からは開けません。</div>
     </div>
+
+    <a href="/competitor" class="tool-link">
+      <span class="tool-ic">🔍</span>
+      <span class="tool-main">
+        <span class="tool-title">競合を1社だけ分析する</span>
+        <span class="tool-desc">競合のURLから KBF / KSF と弱点を洗い出します</span>
+      </span>
+      <span class="tool-arrow">→</span>
+    </a>
 
     <div class="quick-or"><span>または、下のフォームに自分で入力する</span></div>
 

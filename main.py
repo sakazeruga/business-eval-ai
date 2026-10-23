@@ -32,6 +32,7 @@ from prompts import (
     prompt_marketing,
     prompt_npv_exit,
     prompt_operations,
+    prompt_rival,
     prompt_vrio,
     prompt_why_me,
     prompt_why_now,
@@ -287,6 +288,7 @@ CHAT_MODEL = HAIKU
 # Perplexity Agent API のモデルID（provider/model、バージョンはハイフン区切り）
 SEARCH_MODELS = {
     "competitors": "anthropic/claude-haiku-5-5",
+    "rival":       "anthropic/claude-haiku-5-5",
     "why_now":     "anthropic/claude-haiku-5-5",
 }
 
@@ -305,6 +307,7 @@ MODELS = {
 
 MAX_TOKENS = {
     "competitors":     8192,
+    "rival":           8192,
     "why_now":         6144,
     "operations":      4096,
     "npv_exit":        6000,
@@ -1073,6 +1076,36 @@ async def saved_report(request: Request):
         request, "result.html",
         {"mode": "startup", "business_idea": {}, "results": {}, "models": MODELS, "restore": True},
     )
+
+
+@app.get("/competitor", response_class=HTMLResponse)
+async def competitor_page(request: Request):
+    """競合1社をURLで指定して KBF/KSF を分析する画面"""
+    return templates.TemplateResponse(request, "competitor.html")
+
+
+@app.post("/competitor/analyze")
+async def competitor_analyze(
+    request: Request,
+    url: str = Form(...),
+    own_business: str = Form(default=""),
+):
+    """指定URLの企業を調べ、その企業の KBF / KSF を返す"""
+    try:
+        url = normalize_url(url)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    if len(own_business) > 4000:
+        return limit_json("自社の説明が長すぎます（4,000文字まで）。", 413)
+    over = await charge(request, "research")
+    if over:
+        return limit_json(over)
+    try:
+        markdown = await call_section(prompt_rival(url, own_business), "rival")
+    except Exception as e:
+        logger.exception("competitor analyze failed: %s", url)
+        return JSONResponse(status_code=502, content={"error": str(e)})
+    return JSONResponse({"url": url, "markdown": markdown})
 
 
 @app.post("/autofill")
