@@ -119,6 +119,11 @@
     <h2>現在の設定</h2>
     <div class="mode">
       <span class="pill">保存先: {{ store_backend }}</span>
+      <span class="pill">本人確認: {{ access_mode }}</span>
+      {% if access_mode == 'unverified' %}
+        <div class="danger">Cloudflare Access のトークン検証が無効です。
+        CF_ACCESS_TEAM_DOMAIN と CF_ACCESS_AUD を設定してください。</div>
+      {% endif %}
       {% if store_backend == 'memory' %}
         <span class="danger">共有ストアが未設定です。承認はマシンの再起動で消えます。</span>
       {% endif %}

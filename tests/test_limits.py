@@ -35,9 +35,16 @@ def H(email):
     return {"cf-access-authenticated-user-email": email}
 
 
+class _State:
+    pass
+
+
 class Req:
+    """charge() に渡す最小限の Request 相当（state を持つ）"""
+
     def __init__(self, email):
         self.headers = {"cf-access-authenticated-user-email": email}
+        self.state = _State()
 
 
 def charge(email, kind):

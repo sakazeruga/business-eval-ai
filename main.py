@@ -20,6 +20,7 @@ from openai import OpenAI
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import access
+import cfaccess
 import store
 from prompts import (
     SYSTEM_BASE,
@@ -44,15 +45,39 @@ REQUIRE_CF_ACCESS = os.getenv("REQUIRE_CF_ACCESS", "false").lower() == "true"
 
 class CloudflareAccessMiddleware(BaseHTTPMiddleware):
     """Cloudflare Access 経由以外の直アクセスを遮断する。
-    Cloudflare は認証済みリクエストに cf-access-authenticated-user-email を付与し、
-    直接アクセスではこのヘッダーを剥ぎ取るため、偽装不可。
+
+    オリジン（*.fly.dev）はインターネットから直接叩けるため、
+    cf-access-authenticated-user-email は攻撃者が自分で付けられる。
+    CF_ACCESS_TEAM_DOMAIN と CF_ACCESS_AUD を設定すると、
+    Cloudflare の公開鍵で署名付きトークンを検証する。
     """
+
     async def dispatch(self, request: Request, call_next):
         if request.url.path == "/health":
             return await call_next(request)
+
+        if cfaccess.VERIFY_ENABLED:
+            try:
+                request.state.verified_email = cfaccess.verify(cfaccess.extract_token(request))
+            except cfaccess.InvalidAccessToken as e:
+                logger.warning("access token rejected path=%s: %s", request.url.path, e)
+                return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+            return await call_next(request)
+
+        # 未設定時はヘッダーの有無しか見られない（偽装可能）。
+        # 被害を限定するため、この状態では管理者権限と上限免除を与えない。
         if not request.headers.get("cf-access-authenticated-user-email"):
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
         return await call_next(request)
+
+if REQUIRE_CF_ACCESS and not cfaccess.VERIFY_ENABLED:
+    logger.critical(
+        "Cloudflare Access のトークン検証が無効です。"
+        "cf-access-authenticated-user-email は偽装可能なため、"
+        "管理者権限と上限免除は無効化されています。"
+        "CF_ACCESS_TEAM_DOMAIN と CF_ACCESS_AUD を設定してください。"
+    )
+
 
 # 承認なしでも通すパス。申請・招待・ヘルスチェックは承認前に触れる必要がある。
 ACCESS_OPEN_PATHS = ("/health", "/request", "/no-access")
@@ -140,7 +165,24 @@ MAX_REPORT_CHARS = 120000
 MAX_QUESTION_CHARS = 3000
 
 def current_user(request: Request) -> str:
+    """このリクエストの利用者。署名検証が有効ならその結果を使う。"""
+    verified = getattr(request.state, "verified_email", None)
+    if verified:
+        return verified
     return (request.headers.get("cf-access-authenticated-user-email") or "local").strip().lower()
+
+
+def identity_verified(request: Request) -> bool:
+    """利用者が本人だと暗号的に確認できているか。"""
+    if not cfaccess.VERIFY_ENABLED:
+        # ローカル開発（Cloudflare 自体を使わない）では検証しようがない
+        return not REQUIRE_CF_ACCESS
+    return bool(getattr(request.state, "verified_email", None))
+
+
+def is_admin_request(request: Request) -> bool:
+    """管理者として扱ってよいか。偽装可能な状態では管理者権限を与えない。"""
+    return identity_verified(request) and access.is_admin(current_user(request))
 
 
 def _today() -> str:
@@ -158,7 +200,7 @@ USAGE_TTL = 2 * 86400
 async def usage_snapshot(request: Request) -> dict:
     """現在の利用者の、本日の使用回数と上限を返す"""
     user = current_user(request)
-    unlimited = user in ADMIN_EMAILS
+    unlimited = is_admin_request(request)
     out = {}
     for kind in USER_LIMITS:
         try:
@@ -172,7 +214,8 @@ async def usage_snapshot(request: Request) -> dict:
 async def charge(request: Request, kind: str) -> str | None:
     """上限内なら1回分を加算して None を返す。超過なら利用者向けの理由文を返す。"""
     user = current_user(request)
-    if user in ADMIN_EMAILS:
+    # 本人確認が偽装可能な状態では、管理者を名乗っても上限を免除しない
+    if is_admin_request(request):
         return None
 
     # 先に判定し、通った場合だけ加算する。
@@ -1111,18 +1154,28 @@ async def invite(request: Request, token: str):
 
 
 def require_admin(request: Request):
-    return access.is_admin(current_user(request))
+    return is_admin_request(request)
+
+
+ADMIN_SETUP_HINT = (
+    "管理画面を使うには、Cloudflare Access のトークン検証を有効にしてください。"
+    "CF_ACCESS_TEAM_DOMAIN と CF_ACCESS_AUD を設定すると利用できます。"
+)
 
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     """承認の管理画面"""
     if not require_admin(request):
+        if access.is_admin(current_user(request)) and not identity_verified(request):
+            return HTMLResponse(render_notice("管理画面を利用できません", ADMIN_SETUP_HINT),
+                                status_code=503)
         return HTMLResponse(render_notice("権限がありません",
                                           "この画面は管理者のみ利用できます。"), status_code=403)
     return templates.TemplateResponse(request, "admin.html", {
         "me": current_user(request),
         "store_backend": store.describe(),
+        "access_mode": cfaccess.describe(),
         "auto_domains": sorted(access.AUTO_APPROVE_DOMAINS),
         "open_access": access.OPEN_ACCESS,
     })
@@ -1200,5 +1253,10 @@ async def admin_invite(
 
 @app.get("/health")
 async def health():
-    """死活監視。共有ストアの状態も返す"""
-    return {"status": "ok", "models": MODELS}
+    """死活監視。認証と保存先の状態も返す"""
+    return {
+        "status": "ok",
+        "access": cfaccess.describe(),
+        "store": store.describe(),
+        "models": MODELS,
+    }
