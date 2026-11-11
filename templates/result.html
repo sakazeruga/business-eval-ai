@@ -422,6 +422,7 @@
     <h3>SECTIONS</h3>
     <ul class="toc-list">
       {% if mode == 'startup' %}
+        <li><a href="#assumptions">前提数値</a></li>
         <li><a href="#competitors">① 競合分析</a></li>
         <li><a href="#why-me">② Why Me</a></li>
         <li><a href="#why-now">③ Why Now</a></li>
@@ -432,6 +433,7 @@
         <li><a href="#npv-exit">⑧ NPV/EXIT</a></li>
         <li><a href="#cross-swot">⑨ クロスSWOT / 打開策</a></li>
       {% else %}
+        <li><a href="#assumptions">前提数値</a></li>
         <li><a href="#competitors">① 競合分析</a></li>
         <li><a href="#coo-diagnosis">② COO診断</a></li>
         <li><a href="#vrio">③ VRIO</a></li>
@@ -442,6 +444,18 @@
   </div>
 
   <!-- セクション出力 -->
+    <!-- 前提数値: 全セクションが共通で使う数値の出所。評価セクションではないので番号を振らない -->
+    <div class="section" id="assumptions" data-category="financial" data-unnumbered>
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-icon">📐</span>
+        <span class="section-title">前提数値（全セクション共通）</span>
+        <span class="cat-badge">財務</span>
+        <span class="model-tag">{{ models.assumptions }}</span>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="section-body" data-section="assumptions">{% if streaming %}{% else %}{{ results.assumptions | default('取得できませんでした') }}{% endif %}</div>
+    </div>
+
     <div class="section" id="competitors" data-category="analysis">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-icon">🔍</span>
@@ -737,12 +751,15 @@
     const anchor = document.querySelector('.section');
     if (anchor) {
       const parent = anchor.parentElement;
+      // 末尾に追加すると質問欄や保存ボタンより下に並ぶため、質問欄の直前に差し込む
+      const before = document.getElementById('chat-box');
       order.forEach(key => {
         const body = document.querySelector('.section-body[data-section="' + key + '"]');
-        if (body) parent.appendChild(body.closest('.section'));
+        if (body) parent.insertBefore(body.closest('.section'), before && before.parentElement === parent ? before : null);
       });
     }
-    document.querySelectorAll('.section .section-title').forEach((t, i) => {
+    // 前提数値（data-unnumbered）は評価セクションではないので番号を振らない
+    document.querySelectorAll('.section:not([data-unnumbered]) .section-title').forEach((t, i) => {
       t.textContent = (NUMS[i] || '') + ' ' + t.textContent.trim().replace(/^[①-⑩]\s*/, '').replace(/\s+/g, ' ');
     });
     // 目次はモード別に描画されているため、残ったセクションから組み直す

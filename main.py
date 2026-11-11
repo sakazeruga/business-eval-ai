@@ -20,11 +20,14 @@ from openai import OpenAI
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import access
+import assumptions
 import cfaccess
 import store
 from prompts import (
+    ASSUMPTIONS_SYSTEM,
     SYSTEM_BASE,
     build_context,
+    prompt_assumptions,
     prompt_cashflow,
     prompt_competitors,
     prompt_coo_diagnosis,
@@ -293,6 +296,7 @@ SEARCH_MODELS = {
 }
 
 MODELS = {
+    "assumptions":     HAIKU,     # 数値の唯一の出所。派生指標は Python で計算する
     "competitors":     "claude-haiku-5.5 + Web検索（Perplexity）",
     "why_me":          HAIKU,
     "vrio":            HAIKU,
@@ -306,6 +310,7 @@ MODELS = {
 }
 
 MAX_TOKENS = {
+    "assumptions":     4096,
     "competitors":     8192,
     "rival":           8192,
     "why_now":         6144,
@@ -460,6 +465,61 @@ async def call_section(prompt_text: str, section_key: str) -> str:
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _sync_call)
+
+
+async def build_assumptions(context: str, mode: str) -> dict:
+    """全セクション共通の前提数値を確定する。
+
+    返り値: {"display": レポート表示用Markdown, "context": 後続セクションへ渡す文脈}
+    失敗しても評価全体は止めない（context が空なら、各セクションは従来どおり推定する）。
+    """
+    client = get_client()
+    prompt = prompt_assumptions(context, mode, assumptions.field_lines())
+
+    def _call(structured: bool) -> str:
+        kwargs: dict = dict(
+            model=MODELS["assumptions"],
+            max_tokens=MAX_TOKENS["assumptions"],
+            messages=[
+                {"role": "system", "content": ASSUMPTIONS_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        extra_body: dict = {"reasoning": {"enabled": False}}
+        if OPENROUTER_ZDR:
+            extra_body["provider"] = {"zdr": True}
+        kwargs["extra_body"] = extra_body
+        if structured:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "assumptions", "strict": True, "schema": assumptions.schema()},
+            }
+        r = client.chat.completions.create(**kwargs)
+        usage = getattr(r, "usage", None)
+        if usage is not None:
+            logger.info("usage section=assumptions model=%s in=%s out=%s structured=%s",
+                        MODELS["assumptions"], usage.prompt_tokens, usage.completion_tokens, structured)
+        return r.choices[0].message.content or ""
+
+    loop = asyncio.get_event_loop()
+    try:
+        try:
+            raw = await loop.run_in_executor(None, _call, True)
+        except Exception as e:
+            # 構造化出力に対応しない経路に回った場合は、通常出力から JSON を読む
+            logger.warning("assumptions structured output failed, retrying plain: %s", e)
+            raw = await loop.run_in_executor(None, _call, False)
+        values = assumptions.reconcile(assumptions.normalize(assumptions.parse(raw)))
+    except Exception as e:
+        logger.exception("assumptions failed")
+        return {
+            "display": f"⚠️ 前提数値を確定できませんでした（{e}）。各セクションは個別に数値を推定しています。",
+            "context": "",
+        }
+
+    derived, warnings = assumptions.compute_derived(values)
+    markdown = assumptions.render(values, derived, warnings)
+    return {"display": markdown, "context": assumptions.context_block(markdown)}
 
 
 async def fetch_competitors(business_idea_summary: str) -> str:
@@ -768,8 +828,8 @@ async def evaluate(
     if extra_context.strip():
         context += f"\n\n## 追加ヒアリング（AI対話で取得）\n{extra_context.strip()}"
 
-    # 画面に出るカード数。競合調査カードは startup モードのみ表示される
-    total = len(SECTION_ORDER["startup" if mode == "startup" else "coo"]) + 2
+    # 画面に出るカード数: 前提数値 + 競合分析 + モード別セクション + クロスSWOT
+    total = len(SECTION_ORDER["startup" if mode == "startup" else "coo"]) + 3
 
     async def generate():
         async with EVAL_SLOTS:
@@ -789,10 +849,24 @@ async def evaluate(
         head, _, tail = page.partition(STREAM_SENTINEL)
         yield head
 
-        competitors = await fetch_competitors(idea_summary)
-        yield fill_script("competitors", competitors)
+        # 競合分析（Web検索）と前提数値の確定は互いに依存しないので同時に走らせる。
+        # 前提数値は競合分析より速く終わるため、評価全体の時間はほぼ伸びない。
+        async def run_competitors():
+            return "competitors", await fetch_competitors(idea_summary)
 
-        ctx = context + f"\n\n## 主要競合（AI自動調査）\n{competitors}"
+        async def run_assumptions():
+            return "assumptions", await build_assumptions(context, mode)
+
+        prereq: dict = {}
+        for done in asyncio.as_completed([asyncio.create_task(run_competitors()),
+                                          asyncio.create_task(run_assumptions())]):
+            key, value = await done
+            prereq[key] = value
+            yield fill_script(key, value["display"] if key == "assumptions" else value)
+
+        ctx = context + f"\n\n## 主要競合（AI自動調査）\n{prereq['competitors']}"
+        if prereq["assumptions"]["context"]:
+            ctx += "\n\n" + prereq["assumptions"]["context"]
         async for key, text in evaluate_sections(mode, ctx):
             yield fill_script(key, text)
 
