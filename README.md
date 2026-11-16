@@ -47,12 +47,12 @@ Why Me スコア = F1(情報収集力) × F2(継続性・公的能力) × F3(巻
 FastAPI + Jinja2 (SSR)
     ↓
 OpenRouter（ZDR強制）
-    ├── anthropic/claude-haiku-5.5   Why Me / VRIO / マーケ / CF / NPV・EXIT
+    ├── anthropic/claude-haiku-5.5   Why Me / VRIO / マーケ / CF / NPV・EXIT / 競合 / Why Now の本文
     ├── anthropic/claude-sonnet-5.5  クロスSWOT（統合判断）
     └── openai/gpt-6-luna            オペレーション蓋然性
-Perplexity Agent API（Web検索 + claude-haiku-5-5）
-    ├── 競合自動リサーチ
-    └── Why Now（市場データの検索・出典付き）
+Perplexity Agent API（Web検索 + claude-haiku-5-5）※ 送るのは検索語か公開URLだけ
+    ├── 競合・Why Now の事実集め（検索語のみ）
+    └── /competitor・URL自動入力（公開URLのみ）
 ```
 
 各セクションは `asyncio.gather` で並列実行。クロスSWOTのみ全セクション結果を集約してから生成。
@@ -137,6 +137,23 @@ py -m uvicorn main:app --reload
 - 「不明」の項目は推定で埋めず、各セクションも数字を作らずに「何を測れば分かるか」を書く
 - 競合分析と同時に走るため、評価全体の時間はほぼ伸びない（約5秒で確定）
 
+## 外部検索に送る内容（検索語だけ）
+
+Perplexity の検索サービスは、API 規約の Search Addendum で ZDR の対象外とされている
+（§1.2.2(iii)）。検索の入力・出力は保持され、製品改善に使われうる（§2.2）。
+そのため、事業構想の本文は Perplexity に送らない（[search_gate.py](search_gate.py)）。
+
+1. OpenRouter（ZDR）が事業構想から一般的な検索語を作る（例: `製造業 見積 自動化 クラウド`）
+2. Python が検索語を検査し、固有名・年以外の数値・URL・入力の10文字以上の書き写しを含む語を捨てる
+   （固有名の一覧は同じ呼び出しで LLM に挙げさせ、検査にだけ使う）
+3. Perplexity には検索語だけを送り、事実と出典URLを集めさせる
+4. 競合分析と Why Now の本文は、事業構想と調査結果を合わせて OpenRouter（ZDR）で書く
+
+- レポートの各セクション末尾に「外部検索（Perplexity）に送った語」を表示する
+- 業種や製品カテゴリを表す語は検索に必要なので送る
+- `/competitor` は競合の公開URLだけを送り、自社との比較は OpenRouter で行う
+- 参照データ源と RAG の設計案は [docs/参照データ源とRAG最小設計.md](docs/参照データ源とRAG最小設計.md)
+
 ---
 
 ## 競合分析（単体ツール）
@@ -177,6 +194,7 @@ python tests/test_limits.py   # 利用上限・入力サイズ・同時実行
 python tests/test_stream.py   # 評価ストリーミングの回帰
 python tests/test_cfaccess.py # Cloudflare Access のトークン検証
 python tests/test_assumptions.py  # 前提数値の計算・単位違いの除外・上書き
+python tests/test_search_gate.py  # 外部検索に送る語の検査（固有名・数値・書き写しの除外）
 ```
 
 ## コスト目安
@@ -187,7 +205,7 @@ python tests/test_assumptions.py  # 前提数値の計算・単位違いの除�
 | うちクロスSWOT（Sonnet 5.5） | 約 $0.05（全体の約 8 割） |
 
 > Haiku 5.5 / Luna は推論を無効化（`reasoning.enabled=false`）。既定のままだと推論トークンが毎回変動し、`max_tokens` を食い潰して本文が切れる。Sonnet 5.5 は推論を無効化できないため `effort: medium`。
-> 要件: 学習利用なし（OpenRouter は `provider.zdr=true`）／非中華モデルのみ。
+> 要件: 学習利用なし（OpenRouter は `provider.zdr=true`。Perplexity には検索語と公開URLだけを送る）／非中華モデルのみ。
 
 ---
 

@@ -28,19 +28,31 @@ async def fake_call_section(prompt_text, key):
     return f"### {key}\n本文 {key}"
 
 
-async def fake_competitors(summary):
-    await asyncio.sleep(0.1)  # 前提数値より遅く終わる想定
-    return "### 競合\n- A社"
-
-
 async def fake_assumptions(context, mode):
     return {"display": f"### 前提数値\n{ASSUMPTION_MARK}",
             "context": f"## 前提数値（全セクション共通・確定）\n{ASSUMPTION_MARK}"}
 
 
+QUERIES = {"competitors": ["業務 自動化 SaaS"], "why_now": ["業務 DX 市場規模 2025"]}
+MEMO_MARK = "TEST-RESEARCH-MEMO"
+perplexity_inputs: list[str] = []
+
+
+async def fake_search_plan(context):
+    return {**QUERIES, "dropped": 0}
+
+
+async def fake_perplexity(section_key, instructions, input_text):
+    await asyncio.sleep(0.1)  # 前提数値より遅く終わる想定
+    perplexity_inputs.append(instructions + "\n" + input_text)
+    return f"- {MEMO_MARK}", {"https://example.com/a": "A社"}
+
+
+# 本物の OpenRouter / Perplexity は呼ばない。research / fetch_competitors は本物を通す
 M.call_section = fake_call_section
-M.fetch_competitors = fake_competitors
-M.build_assumptions = fake_assumptions  # 本物の OpenRouter を呼ばない
+M.build_assumptions = fake_assumptions
+M.build_search_plan = fake_search_plan
+M.perplexity_agent = fake_perplexity
 
 fails = 0
 
@@ -62,10 +74,27 @@ EXPECT = {
 for mode, expect in EXPECT.items():
     store.reset_memory_for_tests()
     calls.clear()
-    res = c.post("/evaluate", data={"mode": mode, "problem": "テスト課題"},
+    perplexity_inputs.clear()
+    res = c.post("/evaluate", data={"mode": mode, "problem": "テスト課題SECRET-IDEA",
+                                    "solution": "秘密の仕組みSECRET-SOLUTION"},
                  headers={"cf-access-authenticated-user-email": "t@x.com"})
     body = res.text
     filled = re.findall(r'fillSection\("([a-z_]+)"', body)
+    research_keys = ["competitors", "why_now"] if mode == "startup" else ["competitors"]
+    check(f"{mode}: Perplexity は調査ごとに1回だけ呼ばれる",
+          len(perplexity_inputs) == len(research_keys), len(perplexity_inputs))
+    check(f"{mode}: Perplexity に事業構想を送らない",
+          perplexity_inputs and not any("SECRET" in x or "t@x.com" in x for x in perplexity_inputs),
+          perplexity_inputs)
+    check(f"{mode}: Perplexity に検索語を送る",
+          all(any(q in x for x in perplexity_inputs) for k in research_keys for q in QUERIES[k]),
+          perplexity_inputs)
+    check(f"{mode}: 調査結果をもとに書く（競合・Why Now）",
+          all(MEMO_MARK in prompts_seen.get(k, "") for k in research_keys),
+          {k: MEMO_MARK in prompts_seen.get(k, "") for k in research_keys})
+    check(f"{mode}: 送った検索語をレポートに表示する",
+          all(f"`{q}`" in body for k in research_keys for q in QUERIES[k]))
+    check(f"{mode}: 出典をレポートに表示する", "https://example.com/a" in body)
     check(f"{mode}: 200で完走", res.status_code == 200, res.status_code)
     check(f"{mode}: 全セクションが流れる", set(expect) <= set(filled), filled)
     check(f"{mode}: 前提数値カードが流れる", "assumptions" in filled, filled)

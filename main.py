@@ -22,12 +22,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import access
 import assumptions
 import cfaccess
+import search_gate
 import store
 from prompts import (
     ASSUMPTIONS_SYSTEM,
+    SEARCH_PLAN_SYSTEM,
     SYSTEM_BASE,
     build_context,
     prompt_assumptions,
+    prompt_search_plan,
+    prompt_rival_compare,
     prompt_cashflow,
     prompt_competitors,
     prompt_coo_diagnosis,
@@ -289,15 +293,24 @@ LUNA = "openai/gpt-6-luna"
 CHAT_MODEL = HAIKU
 
 # Perplexity Agent API のモデルID（provider/model、バージョンはハイフン区切り）
+# Perplexity の検索は ZDR の対象外（Search Addendum §1.2.2・§2.2）なので、
+# 送るのは一般的な検索語（research）か公開URL（rival / autofill）だけにする。
 SEARCH_MODELS = {
-    "competitors": "anthropic/claude-haiku-5-5",
-    "rival":       "anthropic/claude-haiku-5-5",
-    "why_now":     "anthropic/claude-haiku-5-5",
+    "research": "anthropic/claude-haiku-5-5",  # 検索語だけを受け取り、事実と出典を集める
+    "rival":    "anthropic/claude-haiku-5-5",  # 公開URLだけを受け取る
+}
+
+# 調査結果をもとに評価本文を書くモデル（OpenRouter・ZDR）。MODELS は表示用の名前を含むため別に持つ。
+WRITER_MODELS = {
+    "competitors":   HAIKU,
+    "why_now":       HAIKU,
+    "rival_compare": HAIKU,
+    "search_plan":   HAIKU,
 }
 
 MODELS = {
     "assumptions":     HAIKU,     # 数値の唯一の出所。派生指標は Python で計算する
-    "competitors":     "claude-haiku-5.5 + Web検索（Perplexity）",
+    "competitors":     "claude-haiku-5.5 + Web検索（Perplexity・検索語のみ送信）",
     "why_me":          HAIKU,
     "vrio":            HAIKU,
     "marketing":       HAIKU,
@@ -305,12 +318,14 @@ MODELS = {
     "npv_exit":        HAIKU,
     "cross_swot":      SONNET,    # 統合判断のみ上位モデル
     "coo_diagnosis":   HAIKU,
-    "why_now":         "claude-haiku-5.5 + Web検索（Perplexity）",
-    "operations":      LUNA,      # 多段業務フロー系ベンチで Haiku より優位
+    "why_now":         "claude-haiku-5.5 + Web検索（Perplexity・検索語のみ送信）",
+    "operations":      LUNA,     # 多段業務フロー系ベンチで Haiku より優位
 }
 
 MAX_TOKENS = {
     "assumptions":     4096,
+    "search_plan":     1024,
+    "research":        6144,
     "competitors":     8192,
     "rival":           8192,
     "why_now":         6144,
@@ -354,40 +369,56 @@ def get_client() -> OpenAI:
     )
 
 
-async def call_search_section(prompt_text: str, section_key: str) -> str:
-    """Web検索が必要なセクションを Perplexity Agent API で評価する"""
+PERPLEXITY_RETRY_WAITS = (2, 5)  # 429 のときの待ち秒数
+
+
+class SearchError(RuntimeError):
+    """Perplexity 呼び出しの失敗（画面に出せる文言を持つ）"""
+
+
+async def perplexity_agent(section_key: str, instructions: str, input_text: str) -> tuple[str, dict]:
+    """Perplexity Agent API を呼び、(本文, {出典URL: タイトル}) を返す。
+
+    input_text は外部の検索サービスに渡る。事業構想の本文を入れないこと。
+    """
     model = SEARCH_MODELS[section_key]
     api_key = os.getenv("PERPLEXITY_API_KEY")
     if not api_key:
-        # 鍵が無くても評価全体は止めず、該当セクションのみ警告を表示する
-        return f"⚠️ [{model}] PERPLEXITY_API_KEY が設定されていないため、Web検索セクションを実行できませんでした。"
+        raise SearchError("PERPLEXITY_API_KEY が設定されていないため、Web検索を実行できませんでした。")
 
     payload = {
         "model": model,
-        "instructions": SYSTEM_BASE + SEARCH_INSTRUCTIONS_SUFFIX,
-        "input": prompt_text,
+        "instructions": instructions,
+        "input": input_text,
         "max_output_tokens": MAX_TOKENS.get(section_key, DEFAULT_MAX_TOKENS),
         "tools": [{"type": "web_search", "max_results": 5}],
     }
 
+    # 競合と Why Now の調査は同時に走るため、レート制限（429）に当たることがある（実測）。
+    # 少し待って再試行する。
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            PERPLEXITY_AGENT_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=payload,
-        )
+        for wait in PERPLEXITY_RETRY_WAITS + (None,):
+            resp = await client.post(
+                PERPLEXITY_AGENT_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+            )
+            if resp.status_code != 429 or wait is None:
+                break
+            logger.warning("perplexity 429 section=%s, retrying in %ss", section_key, wait)
+            await asyncio.sleep(wait)
 
     if resp.status_code != 200:
         try:
             detail = resp.json().get("error", {}).get("message", resp.text[:300])
         except ValueError:
             detail = resp.text[:300]
-        return f"⚠️ [{model}] Perplexity API エラー（HTTP {resp.status_code}）: {detail}"
+        raise SearchError(f"Perplexity API エラー（HTTP {resp.status_code}）: {detail}")
 
     data = resp.json()
     if data.get("status") == "failed" or data.get("error"):
         msg = (data.get("error") or {}).get("message", "unknown")
-        return f"⚠️ [{model}] Perplexity API が失敗を返しました: {msg}"
+        raise SearchError(f"Perplexity API が失敗を返しました: {msg}")
 
     texts: list[str] = []
     sources: dict[str, str] = {}
@@ -410,7 +441,7 @@ async def call_search_section(prompt_text: str, section_key: str) -> str:
 
     content = "".join(texts).strip()
     if not content:
-        return f"⚠️ [{model}] 空の応答が返されました（status: {data.get('status')}）"
+        raise SearchError(f"空の応答が返されました（status: {data.get('status')}）")
 
     usage = data.get("usage") or {}
     logger.info(
@@ -418,19 +449,32 @@ async def call_search_section(prompt_text: str, section_key: str) -> str:
         section_key, model, usage.get("input_tokens"), usage.get("output_tokens"),
         (usage.get("cost") or {}).get("total_cost"),
     )
+    return content, sources
 
-    if sources:
-        content += "\n\n**出典**\n" + "\n".join(f"- [{t}]({u})" for u, t in sources.items())
-    return content
+
+def sources_block(sources: dict) -> str:
+    if not sources:
+        return ""
+    return "\n\n**出典**\n" + "\n".join(f"- [{t}]({u})" for u, t in sources.items())
+
+
+async def call_search_section(prompt_text: str, section_key: str) -> str:
+    """公開URLだけを渡す調査（rival）を Perplexity で実行する"""
+    try:
+        content, sources = await perplexity_agent(
+            section_key, SYSTEM_BASE + SEARCH_INSTRUCTIONS_SUFFIX, prompt_text)
+    except SearchError as e:
+        return f"⚠️ [{SEARCH_MODELS[section_key]}] {e}"
+    return content + sources_block(sources)
 
 
 async def call_section(prompt_text: str, section_key: str) -> str:
-    """単一セクションを評価する（非同期）。検索系は Perplexity、他は OpenRouter 経由"""
+    """単一セクションを評価する（非同期）。rival だけ Perplexity、他は OpenRouter（ZDR）経由"""
     if section_key in SEARCH_MODELS:
         return await call_search_section(prompt_text, section_key)
 
     client = get_client()
-    model = MODELS.get(section_key, HAIKU)
+    model = WRITER_MODELS.get(section_key) or MODELS.get(section_key, HAIKU)
     max_tokens = MAX_TOKENS.get(section_key, DEFAULT_MAX_TOKENS)
 
     def _sync_call() -> str:
@@ -522,13 +566,95 @@ async def build_assumptions(context: str, mode: str) -> dict:
     return {"display": markdown, "context": assumptions.context_block(markdown)}
 
 
-async def fetch_competitors(business_idea_summary: str) -> str:
-    """Web検索付きで競合を分析する（失敗しても評価全体は止めない）"""
+async def build_search_plan(context: str) -> dict:
+    """事業構想から、外部検索に送ってよい一般的な検索語を作る（OpenRouter・ZDR）。
+
+    返り値: {"competitors": [...], "why_now": [...], "dropped": 捨てた数}
+    失敗したら検索語は空になり、各セクションは検索なしで進む（事業構想は外に出さない）。
+    """
+    client = get_client()
+
+    def _call(structured: bool) -> str:
+        kwargs: dict = dict(
+            model=WRITER_MODELS["search_plan"],
+            max_tokens=MAX_TOKENS["search_plan"],
+            messages=[
+                {"role": "system", "content": SEARCH_PLAN_SYSTEM},
+                {"role": "user", "content": prompt_search_plan(context)},
+            ],
+        )
+        extra_body: dict = {"reasoning": {"enabled": False}}
+        if OPENROUTER_ZDR:
+            extra_body["provider"] = {"zdr": True}
+        kwargs["extra_body"] = extra_body
+        if structured:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "search_plan", "strict": True, "schema": search_gate.schema()},
+            }
+        r = client.chat.completions.create(**kwargs)
+        return r.choices[0].message.content or ""
+
+    loop = asyncio.get_event_loop()
     try:
-        return await call_section(prompt_competitors(business_idea_summary), "competitors")
+        try:
+            raw = await loop.run_in_executor(None, _call, True)
+        except Exception as e:
+            logger.warning("search plan structured output failed, retrying plain: %s", e)
+            raw = await loop.run_in_executor(None, _call, False)
+        plan = search_gate.build_plan(search_gate.parse(raw), context)
+    except Exception:
+        logger.exception("search plan failed")
+        return {"competitors": [], "why_now": [], "dropped": 0, "error": True}
+    # 送る語は監査のために記録する（捨てた語は機密の可能性があるので数だけ）
+    logger.info("search plan competitors=%s why_now=%s dropped=%s",
+                plan["competitors"], plan["why_now"], plan["dropped"])
+    return plan
+
+
+async def research(purpose: str, queries: list[str]) -> dict:
+    """検索語だけを Perplexity に送り、事実の一覧と出典を集める。
+
+    返り値: {"memo": 調査メモ, "sources": {URL: タイトル}, "queries": 送った語, "error": 失敗理由}
+    """
+    if not queries:
+        return {"memo": "", "sources": {}, "queries": [],
+                "error": "外部に送れる検索語が作れなかったため、Web検索は行っていません。"}
+    try:
+        memo, sources = await perplexity_agent(
+            "research", search_gate.RESEARCH_INSTRUCTIONS, search_gate.research_input(purpose, queries))
+    except Exception as e:
+        logger.exception("research failed: %s", purpose)
+        return {"memo": "", "sources": {}, "queries": queries, "error": f"Web検索に失敗しました（{e}）"}
+    return {"memo": memo, "sources": sources, "queries": queries, "error": ""}
+
+
+def research_memo(found: dict) -> str:
+    """評価本文を書くモデルに渡す調査メモ（失敗時はその旨を伝え、推測で埋めさせない）"""
+    if found.get("memo"):
+        return found["memo"]
+    return f"（{found.get('error') or 'Web調査の結果はありません'}。社名・価格・市場規模などは「未確認」とすること）"
+
+
+def with_research_footer(text: str, found: dict) -> str:
+    """評価本文の末尾に、出典と「外部に送った検索語」を付ける"""
+    footer = ""
+    if found.get("error"):
+        footer += f"\n\n> ⚠️ {found['error']}"
+    footer += sources_block(found.get("sources") or {})
+    footer += search_gate.sent_note(found.get("queries") or [])
+    return text + footer
+
+
+async def fetch_competitors(business_idea_summary: str, found: dict) -> str:
+    """調査結果をもとに競合を分析する（失敗しても評価全体は止めない）"""
+    try:
+        text = await call_section(
+            prompt_competitors(business_idea_summary, research_memo(found)), "competitors")
     except Exception as e:  # 競合分析の失敗で全セクションを落とさない
         logger.exception("competitors failed")
         return f"⚠️ 競合分析に失敗しました: {e}"
+    return with_research_footer(text, found)
 
 
 # 表示順。クロスSWOT は全セクションの結果を要約して渡すため必ず最後。
@@ -554,15 +680,27 @@ def section_prompts_for(mode: str, context: str) -> dict[str, str]:
     return {k: builders[k](context) for k in keys}
 
 
-async def evaluate_sections(mode: str, context: str):
+# Web調査の結果を受け取って書くセクション（調査は検索語だけで先に走らせておく）
+RESEARCH_BUILDERS = {
+    "why_now": prompt_why_now,
+}
+
+
+async def evaluate_sections(mode: str, context: str, research_tasks: dict | None = None):
     """セクションを並列実行し、完成した順に (key, text) を yield する。
 
+    research_tasks: {セクション: 調査タスク}。そのセクションは調査の完了を待ってから書く。
     クロスSWOT だけは全セクションの要約を入力に取るため、最後に実行する。
     """
     section_prompts = section_prompts_for(mode, context)
+    research_tasks = research_tasks or {}
 
     async def run(key: str, prompt_text: str) -> tuple[str, str]:
         try:
+            if key in research_tasks and key in RESEARCH_BUILDERS:
+                found = await research_tasks[key]
+                text = await call_section(RESEARCH_BUILDERS[key](context, research_memo(found)), key)
+                return key, with_research_footer(text, found)
             return key, await call_section(prompt_text, key)
         except Exception as e:  # 1セクションの失敗で全体を止めない
             logger.exception("section failed: %s", key)
@@ -688,7 +826,7 @@ async def autofill_from_url(url: str, mode: str) -> dict:
     )
     asks = "\n".join(f"- {k}: {v}" for k, v in fields.items())
     payload = {
-        "model": SEARCH_MODELS["competitors"],
+        "model": SEARCH_MODELS["rival"],  # 送るのは公開URLと調査項目だけ
         "instructions": AUTOFILL_INSTRUCTIONS,
         "input": (
             f"調査対象URL: {url}\n\n{focus}\n\n"
@@ -849,10 +987,23 @@ async def evaluate(
         head, _, tail = page.partition(STREAM_SENTINEL)
         yield head
 
-        # 競合分析（Web検索）と前提数値の確定は互いに依存しないので同時に走らせる。
+        # 外部検索には事業構想を送らない。まず検索語だけを作り（OpenRouter・ZDR）、
+        # 競合と Why Now の調査を同時に走らせる。Why Now の調査は他セクションの裏で進む。
+        plan_task = asyncio.create_task(build_search_plan(context))
+
+        async def research_for(purpose: str) -> dict:
+            plan = await plan_task
+            return await research(purpose, plan.get(purpose) or [])
+
+        research_tasks = {}
+        if mode == "startup":
+            research_tasks["why_now"] = asyncio.create_task(research_for("why_now"))
+
+        # 競合分析と前提数値の確定は互いに依存しないので同時に走らせる。
         # 前提数値は競合分析より速く終わるため、評価全体の時間はほぼ伸びない。
         async def run_competitors():
-            return "competitors", await fetch_competitors(idea_summary)
+            found = await research_for("competitors")
+            return "competitors", await fetch_competitors(idea_summary, found)
 
         async def run_assumptions():
             return "assumptions", await build_assumptions(context, mode)
@@ -867,7 +1018,7 @@ async def evaluate(
         ctx = context + f"\n\n## 主要競合（AI自動調査）\n{prereq['competitors']}"
         if prereq["assumptions"]["context"]:
             ctx += "\n\n" + prereq["assumptions"]["context"]
-        async for key, text in evaluate_sections(mode, ctx):
+        async for key, text in evaluate_sections(mode, ctx, research_tasks):
             yield fill_script(key, text)
 
         yield "<script>finishStreaming();</script>"
@@ -1175,7 +1326,11 @@ async def competitor_analyze(
     if over:
         return limit_json(over)
     try:
-        markdown = await call_section(prompt_rival(url, own_business), "rival")
+        # Perplexity には公開URLだけを送る。自社の説明は外部検索に出さず、比較は OpenRouter（ZDR）で行う
+        markdown = await call_section(prompt_rival(url), "rival")
+        if own_business.strip() and not markdown.startswith("⚠️"):
+            markdown += "\n\n" + await call_section(
+                prompt_rival_compare(markdown, own_business), "rival_compare")
     except Exception as e:
         logger.exception("competitor analyze failed: %s", url)
         return JSONResponse(status_code=502, content={"error": str(e)})
